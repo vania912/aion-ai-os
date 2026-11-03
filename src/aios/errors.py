@@ -42,3 +42,11 @@ class SearchError(AiosError):
 
 class GitError(AiosError):
     """A git operation failed, timed out, or was refused by the runner's allowlist."""
+
+
+class MemoryStoreError(AiosError):
+    """The memory store or its index could not be read or built."""
+
+
+class UnknownRecordError(AiosError):
+    """A memory record id does not exist."""
