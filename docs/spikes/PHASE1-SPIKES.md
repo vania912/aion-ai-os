@@ -27,7 +27,11 @@ Code: [`spikes/`](../../spikes/). These are throwaway checks, not production cod
 | uv | 0.11.30 |
 | stdin TTY | True, **in the user's own PowerShell**. This is the expected case for typed approvals. It does **not** answer S9, which is whether Claude Code's shell tool on Windows has a TTY (still untested) |
 
-Still open: S5 (Windows shutdown timing), S7/S8 (interactive prompt and resource behaviour), S9 (Claude Code shell tool TTY on Windows).
+| `mcp==2.3.0` install (uv venv, CPython 3.12.13 chosen by uv) | Installed cleanly on Windows (29 packages incl. pywin32) |
+| `claude mcp add` of the spike server (local scope) | Succeeded |
+| S5 shutdown check, run directly from PowerShell | clean first line=True; exit after stdin close=**178 ms** (<300 ms). Not launched by Claude Code itself, so Claude Code's own handling is still untested |
+
+Still open: S7/S8 (interactive prompt and resource behaviour), S9 (Claude Code shell tool TTY on Windows).
 
 ## To do on your machine (≈5 minutes)
 1. `python spikes/env_check.py` and paste the output (no project data in it).
