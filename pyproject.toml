@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aion-ai-os"
+version = "0.0.1"
+description = "Personal AI operating layer for Claude Code, exposed through MCP."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=2,<3",
+    "pydantic>=2.7,<3",
+    "pyyaml>=6.0,<7",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "types-PyYAML",
+]
+
+[project.scripts]
+aios = "aios.interfaces.cli.app:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aios"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["spikes"]  # throwaway spike scripts; they print by design
+
+[tool.ruff.lint]
+# T20 forbids print(): stdout is the MCP protocol channel (see docs/spikes/PHASE1-SPIKES.md, S4).
+select = ["E", "F", "I", "UP", "B", "SIM", "T20", "RUF"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

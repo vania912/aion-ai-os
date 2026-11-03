@@ -1,0 +1,12 @@
+# Example registry. Copy to <AIOS_DATA_DIR>/registry.yaml and edit.
+# Paths below are placeholders, not real locations.
+projects:
+  pulse:
+    path: "D:/example/pulse"
+    description: "Example project one"
+    git: true
+
+  blueprint:
+    path: "D:/example/blueprint"
+    description: "Example project two"
+    git: true
