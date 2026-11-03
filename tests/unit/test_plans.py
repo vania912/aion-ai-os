@@ -614,3 +614,27 @@ def test_cli_reject_and_errors(tmp_path: Path, cli: tuple[Path, list[str]]) -> N
     assert "rejected" in runner.invoke(app, ["plan", "list", *base]).output
     doctor = runner.invoke(app, ["doctor", *base])
     assert "plan_" not in doctor.output
+
+
+def test_events_after_a_final_state_are_ignored_and_reported(svc: PlanService, data: Path) -> None:
+    view = svc.create(content())
+    base = {
+        "actor": "cli", "by": "x", "plan_hash": view.plan_hash,
+        "ts": "2026-11-03T10:00:00.000+00:00",
+    }  # fmt: skip
+    kinds = [
+        ("rejected", {"reason": "no"}),
+        ("approved", {"tier": "R2"}),  # approving a rejected plan after the fact
+        ("outcome", {"outcome": "executed"}),
+    ]
+    lines = [{"seq": n, "event": k, "data": d, **base} for n, (k, d) in enumerate(kinds, start=1)]
+    events_file(data).write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    after = svc.get(view.plan.id)
+    assert after.status == "rejected" and after.approval is None and len(after.anomalies) == 2
+
+
+def test_only_plan_files_count_as_plans_not_their_event_files(svc: PlanService, data: Path) -> None:
+    approved(svc)
+    events_file(data, "PLAN-0050").write_text("", encoding="utf-8")
+    assert PlanStore(data).ids() == ["PLAN-0001"]
+    assert PlanStore(data).orphan_event_files() == ["PLAN-0050"]
