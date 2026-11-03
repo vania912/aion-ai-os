@@ -21,7 +21,7 @@ claude mcp add --env AIOS_DATA_DIR=C:\path\to\aios-data --transport stdio aios -
 4. In Claude Code, `/mcp` should show `aios` connected. Tools appear as `mcp__aios__<tool>`,
    prompts as `/mcp__aios__analyze_project <project>`, resources under `@` as
    `aios:project://<id>/...`.
-5. Permissions: the 14 default tools are read-only (18 with `--allow-propose`, see below). Claude Code permission rules name MCP tools
+5. Permissions: the 16 default tools are read-only (22 with `--allow-propose`, see below). Claude Code permission rules name MCP tools
    `mcp__<server>__<tool>`, and a rule `mcp__aios` covers every tool of the server (per the Claude
    Code permission docs). The exact settings-file layout should be taken from the current docs.
 6. Troubleshooting: the server logs JSON to stderr only (stdout is the protocol). If it does not
@@ -88,6 +88,14 @@ refused. Audit events for writes record ids, types and sizes, never titles or bo
 Claude Code prompts: whether each proposal asks for permission is your choice (decision D4). With an
 `allow` rule such as `mcp__aios__propose_task`, proposals are silent and you review them later with
 `aios review list`.
+
+### Plan tools (Phase 3)
+
+`list_plans` and `get_plan` are read-only and always present (16 read-only tools in total).
+`create_plan` and `record_verification` need `--allow-propose` (22 tools with the flag). There is no
+tool to approve, reject, verify or record an outcome. The prompt `/mcp__aios__prepare_change_plan
+<project>` walks the model through: read, draft, agree with you, `create_plan`, wait for approval.
+Details, limits and the "approval is a record, not a barrier" caveat: [PLANS.md](PLANS.md).
 
 ## Keeping the review step human-only (D2)
 
