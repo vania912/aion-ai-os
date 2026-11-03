@@ -25,6 +25,7 @@ from aios.services.audit import AuditLog
 from aios.services.files import FileService
 from aios.services.git import GitService, build_git_service
 from aios.services.memory import MemoryService
+from aios.services.memory_write import MemoryWriter
 from aios.services.registry import load_registry
 
 T = TypeVar("T")
@@ -49,7 +50,7 @@ TOOL_NAMES = (
     "get_decision_history",
 )
 OPERATIONS = (*TOOL_NAMES, "read_resource", "get_prompt")
-#: Operations the write tools (Phase 2c) will use. They are PROPOSE level: they can only create
+#: Operations the write tools use. They are PROPOSE level: they can only create
 #: unreviewed memory records, never touch a project. Denied unless the server is started with
 #: ``--allow-propose``.
 PROPOSE_OPERATIONS = (
@@ -68,6 +69,7 @@ class ServerContext:
         self.allow_propose = allow_propose
         self.audit = audit if audit is not None else AuditLog(data_dir, actor="mcp")
         self.memory = MemoryService(data_dir)
+        self.writer = MemoryWriter(data_dir)  # only used by tools registered with allow_propose
         enabled = {PermissionLevel.READ_ONLY}
         if allow_propose:
             enabled.add(PermissionLevel.PROPOSE)  # opt-in: default deny stays the rule

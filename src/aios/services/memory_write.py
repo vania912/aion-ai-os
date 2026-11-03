@@ -194,6 +194,19 @@ class MemoryWriter:
                 "body is too long for a proposal "
                 f"({self._cfg.max_claude_body_chars} characters max)"
             )
+        wanted = " ".join(new.title.casefold().split())
+        for loaded in existing.values():
+            r = loaded.record
+            if (
+                not r.reviewed
+                and r.project == new.project
+                and r.type == new.type
+                and " ".join(r.title.casefold().split()) == wanted
+            ):
+                raise InvalidRequestError(
+                    f"{r.id} already proposes this {r.type} with the same title and is "
+                    "awaiting review; do not propose it twice"
+                )
         pending = sum(
             1
             for loaded in existing.values()

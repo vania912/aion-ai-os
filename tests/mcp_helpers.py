@@ -45,7 +45,7 @@ def call(world: World, name: str, **args: Any) -> str:
     return text_of(run(world.server.call_tool(name, args)))
 
 
-def make_world(tmp_path: Path) -> World:
+def make_world(tmp_path: Path, *, allow_propose: bool = False) -> World:
     hist = make_history(tmp_path)
     repo = hist.repo
     (repo / "src" / "util.py").write_text("def workspace():\n    return 1\n")
@@ -90,5 +90,5 @@ def make_world(tmp_path: Path) -> World:
         title="Do we need per-region routing?",
         date="2026-10-04",
     )
-    server, ctx = build_server(data)
+    server, ctx = build_server(data, allow_propose=allow_propose)
     return World(tmp_path, data, hist, server, ctx)
