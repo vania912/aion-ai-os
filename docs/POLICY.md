@@ -58,7 +58,7 @@ symlink target (tested).
 - 117 tests pass locally on Linux (Python 3.13) at the time of writing; CI runs Linux and Windows.
 - Adversarial cases: traversal, absolute and UNC paths, drive letters, ADS, control characters,
   reserved names, 8.3 aliases, symlinks out of the root and into denied locations, case variants.
-- An invariant fuzz test tries about 2,000 token combinations and asserts that a successful
+- An invariant fuzz test tries all 2,379 combinations of up to three path tokens and asserts that a successful
   `resolve()` is inside the root and never reaches `.git` or a denied final name.
 - Mutation check (manual, once): disabling the post-symlink deny check, the confinement check, or
   the `..` rejection each made the suite fail.
