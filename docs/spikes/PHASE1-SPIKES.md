@@ -15,6 +15,20 @@ Code: [`spikes/`](../../spikes/). These are throwaway checks, not production cod
 | S8 | Are resource *templates* visible to Claude Code? | **Not verified** | The headless resource listing returned only the concrete resource; templates may be listed separately or not at all. Design already registers concrete resources per project |
 | S9 | Does the shell tool Claude Code uses have a TTY on stdin? | **No** in this harness (`[ -t 0 ]` false) | Supports the TTY-check mitigation (ARCHITECTURE §E.4), but this is a cloud harness; the user's local Claude Code on Windows is **not verified** |
 
+## Windows results (user's machine, `env_check.py`, 2026-11-03)
+
+| Item | Result |
+|---|---|
+| OS | Windows 11 (10.0.26300) |
+| Python | 3.13.14 (meets the >= 3.11 requirement) |
+| SQLite / FTS5 | 3.50.4 / **OK** → S1 confirmed on Windows |
+| git | 2.54.0 |
+| ripgrep | **Not found on PATH** → S2: on this machine the pure-Python fallback would be used unless `rg` is installed |
+| uv | 0.11.30 |
+| stdin TTY | True, **in the user's own PowerShell**. This is the expected case for typed approvals. It does **not** answer S9, which is whether Claude Code's shell tool on Windows has a TTY (still untested) |
+
+Still open: S5 (Windows shutdown timing), S7/S8 (interactive prompt and resource behaviour), S9 (Claude Code shell tool TTY on Windows).
+
 ## To do on your machine (≈5 minutes)
 1. `python spikes/env_check.py` and paste the output (no project data in it).
 2. Register the spike server and check the interactive UI:
