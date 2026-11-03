@@ -626,11 +626,13 @@ def test_events_after_a_final_state_are_ignored_and_reported(svc: PlanService, d
         ("rejected", {"reason": "no"}),
         ("approved", {"tier": "R2"}),  # approving a rejected plan after the fact
         ("outcome", {"outcome": "executed"}),
+        ("report", {"results": [{"step": 1, "outcome": "pass"}]}),
     ]
     lines = [{"seq": n, "event": k, "data": d, **base} for n, (k, d) in enumerate(kinds, start=1)]
     events_file(data).write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
     after = svc.get(view.plan.id)
-    assert after.status == "rejected" and after.approval is None and len(after.anomalies) == 2
+    assert after.status == "rejected" and after.approval is None and len(after.anomalies) == 3
+    assert after.reports == []
 
 
 def test_only_plan_files_count_as_plans_not_their_event_files(svc: PlanService, data: Path) -> None:
