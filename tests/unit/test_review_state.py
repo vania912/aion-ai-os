@@ -101,10 +101,11 @@ def test_reviewed_filter_in_list_and_search(mem: MemoryService) -> None:
 # -- snapshot -------------------------------------------------------------------------------
 
 
-def test_unreviewed_records_never_appear_as_established_in_the_snapshot(mem: MemoryService) -> None:
-    ctx = build_context(
-        "pulse", ProjectConfig(path=Path("/x"), description="d", git=False), git=None, memory=mem
-    )
+def test_unreviewed_records_never_appear_as_established_in_the_snapshot(
+    mem: MemoryService, tmp_path: Path
+) -> None:
+    project = ProjectConfig(path=tmp_path, description="d", git=False)  # absolute on every OS
+    ctx = build_context("pulse", project, git=None, memory=mem)
     assert [h.id for h in ctx.active_decisions] == ["DEC-0001"]
     assert ctx.proposed_decisions == []  # the only proposal is unreviewed
     assert [h.id for h in ctx.open_tasks] == ["TSK-0001"]
@@ -120,9 +121,8 @@ def test_unreviewed_records_never_appear_as_established_in_the_snapshot(mem: Mem
 
 def test_a_human_proposal_is_listed_as_proposed_not_as_awaiting_review(tmp_path: Path) -> None:
     write_record(tmp_path, id="DEC-0001", status="proposed", title="Hand-written proposal")
-    ctx = build_context(
-        "pulse", ProjectConfig(path=Path("/x"), git=False), git=None, memory=MemoryService(tmp_path)
-    )
+    project = ProjectConfig(path=tmp_path, git=False)  # absolute on every OS
+    ctx = build_context("pulse", project, git=None, memory=MemoryService(tmp_path))
     assert [h.id for h in ctx.proposed_decisions] == ["DEC-0001"] and ctx.awaiting_review == []
 
 
