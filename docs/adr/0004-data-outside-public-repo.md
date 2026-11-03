@@ -4,7 +4,7 @@
 - **Date:** 2026-11-03
 
 ## Decision
-Code lives in the public aion-ai-os repo. The project registry and memory data live in a separate private repo or local folder, located via AIOS_DATA_DIR.
+Code lives in the public aion-ai-os repo. The project registry and memory data live in a separate **local git repository with no remote** (chosen 2026-11-03), located via AIOS_DATA_DIR.
 
 ## Reason
 aion-ai-os is public. Registry paths and decision logs about company projects must not be published.
@@ -14,4 +14,4 @@ aion-ai-os is public. Registry paths and decision logs about company projects mu
 - Local data only, unversioned.
 
 ## Consequences / trade-offs
-Two locations to manage. Private data repo needs its own backup and access control.
+Two locations to manage. With no remote there is no off-machine backup unless one is added later; loss of the machine means loss of memory history. Revisit if that risk matters.

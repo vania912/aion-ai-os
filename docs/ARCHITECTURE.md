@@ -618,7 +618,7 @@ Each phase ships something usable and is gated by your approval.
 
 ---
 
-## K. Open questions
+## K. Open questions (resolved in ADR-0008 unless marked open)
 
 1. **Approval self-bypass (E.4):** which mitigations do you want, and is any residual risk acceptable?
 2. **Seeding memory:** do you want to backfill existing decisions (Slack, Notion, docs) in Phase 2, and from where?
