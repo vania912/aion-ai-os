@@ -1,6 +1,6 @@
 # ADR-0007: No embeddings or vector database until retrieval failures are measured
 
-- **Status:** Proposed (pending Phase 0 approval)
+- **Status:** Accepted (architecture approved 2026-11-03)
 - **Date:** 2026-11-03
 
 ## Decision

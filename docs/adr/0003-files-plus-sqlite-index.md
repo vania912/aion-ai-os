@@ -1,6 +1,6 @@
 # ADR-0003: Markdown/YAML files as source of truth with a rebuildable SQLite FTS index
 
-- **Status:** Accepted by user in brainstorm (architecture still pending approval)
+- **Status:** Accepted (architecture approved 2026-11-03)
 - **Date:** 2026-11-03
 
 ## Decision

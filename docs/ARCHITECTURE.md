@@ -1,6 +1,6 @@
 # aion-ai-os — Phase 0 Architecture
 
-Status: **DRAFT for approval** · Date: 2026-11-03 · No implementation code exists yet.
+Status: **APPROVED by user on 2026-11-03** · Date: 2026-11-03 · No implementation code exists yet.
 
 This document covers sections A–J of the Phase 0 brief. Decisions that were
 settled in the brainstorm are recorded as ADRs in [`docs/adr/`](adr/).

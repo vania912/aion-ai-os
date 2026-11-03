@@ -1,6 +1,6 @@
 # ADR-0004: Memory and registry live outside the public code repository
 
-- **Status:** Accepted by user in brainstorm (architecture still pending approval)
+- **Status:** Accepted (architecture approved 2026-11-03)
 - **Date:** 2026-11-03
 
 ## Decision

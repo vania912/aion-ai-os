@@ -1,6 +1,6 @@
 # ADR-0001: One modular MCP server instead of a gateway plus multiple servers
 
-- **Status:** Proposed (pending Phase 0 approval)
+- **Status:** Accepted (architecture approved 2026-11-03)
 - **Date:** 2026-11-03
 
 ## Decision

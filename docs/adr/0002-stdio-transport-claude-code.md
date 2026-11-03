@@ -1,6 +1,6 @@
 # ADR-0002: Local stdio transport targeting Claude Code
 
-- **Status:** Accepted by user in brainstorm (architecture still pending approval)
+- **Status:** Accepted (architecture approved 2026-11-03)
 - **Date:** 2026-11-03
 
 ## Decision
