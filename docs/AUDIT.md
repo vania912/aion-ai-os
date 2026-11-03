@@ -58,9 +58,19 @@ It is **not tamper-proof**:
 
 ## Concurrency and durability
 
-Appends from several processes (the CLI and the MCP server) are serialised with an OS file lock
-(`fcntl.flock` on POSIX, `msvcrt.locking` on Windows). Every event is flushed with `fsync`.
-Throughput and latency of that `fsync` per call were not measured.
+Appends from several threads and processes (the CLI and the MCP server) are serialised in two
+steps: threads of one process queue on an in-process lock, then the writer takes an exclusive OS
+file lock (`fcntl.flock` on POSIX, `msvcrt.locking` on Windows) by **polling** non-blocking
+attempts. If the lock cannot be taken within 30 seconds (configurable) the append fails with
+"timed out waiting for the audit lock" and, because request events are written before anything
+runs, the call is refused (fail closed). Every event is flushed with `fsync`; its cost per call was
+not measured.
+
+*History:* the first version used the blocking Windows lock mode. A Windows CI run failed under 20
+simultaneous calls with "Resource deadlock avoided". My understanding, from that error and from
+Microsoft's documentation as I remember it [not verified], is that this mode gives up after about
+ten one-second retries, which many queued writers can exceed on a slow disk. The polling lock and
+the in-process queue replace it; the Windows CI result for that fix is the confirmation.
 
 ## Retention
 
@@ -75,10 +85,11 @@ or listed in its `.gitignore` (it is not ignored automatically).
 
 ## Test evidence
 
-- 70 tests added (560 pass in total, 1 POSIX-skip, locally on Linux). They cover the chain across
+- 72 tests added (600 pass in total, 1 POSIX-skip, locally on Linux). They cover the chain across
   restarts and month rollover, a backwards clock, torn writes, edits / deletions / reordering /
   duplication / a deleted month, the documented tail-truncation limit, 8 threads and 3 separate
-  processes appending concurrently, oversized events, redaction patterns and false-positive
+  processes appending concurrently, 20 writers behind a slow `fsync`, a lock held by another
+  process (timeout, then recovery), oversized events, redaction patterns and false-positive
   guards, argument bounds, request/result pairing, denied operations never running, failure
   classification, fail-closed and result-failure behaviour, listing filters, and the CLI.
 - 15 deliberate breakages each make the suite fail (verification checks, fail-closed, denied

@@ -18,6 +18,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -39,29 +41,67 @@ def event_hash(data: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-@contextlib.contextmanager
-def _exclusive_lock(path: Path) -> Iterator[None]:
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+# Threads of one process queue here first, so only one of them competes for the OS lock.
+_PROCESS_LOCK = threading.Lock()
+_LOCK_POLL_S = 0.02
+
+
+def _try_os_lock(fd: int) -> bool:
+    """One non-blocking attempt at the exclusive OS lock; False if another process holds it."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    import fcntl
+
     try:
-        if sys.platform == "win32":
-            import msvcrt
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
 
-            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)  # retries for ~10 s, then raises OSError
+
+def _os_unlock(fd: int) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def _exclusive_lock(path: Path, timeout_s: float) -> Iterator[None]:
+    """Exclusive lock across threads and processes, with our own bounded wait.
+
+    The Windows ``LK_LOCK`` mode gives up after about 10 seconds and reports "Resource deadlock
+    avoided", which many queued writers can exceed on a slow disk; so we poll with ``LK_NBLCK``.
+    """
+    deadline = time.monotonic() + timeout_s
+    if not _PROCESS_LOCK.acquire(timeout=timeout_s):
+        raise AuditError(f"timed out after {timeout_s:g}s waiting for the audit lock")
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            while not _try_os_lock(fd):
+                if time.monotonic() >= deadline:
+                    raise AuditError(f"timed out after {timeout_s:g}s waiting for the audit lock")
+                time.sleep(_LOCK_POLL_S)
             try:
                 yield
             finally:
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                _os_unlock(fd)
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        _PROCESS_LOCK.release()
 
 
 def _parse(line: str) -> AuditEvent | None:
@@ -72,9 +112,12 @@ def _parse(line: str) -> AuditEvent | None:
 
 
 class JsonlAuditStore:
-    def __init__(self, directory: Path, *, max_event_bytes: int = 4096) -> None:
+    def __init__(
+        self, directory: Path, *, max_event_bytes: int = 4096, lock_timeout_s: float = 30.0
+    ) -> None:
         self._dir = directory
         self._max_event_bytes = max_event_bytes
+        self._lock_timeout_s = lock_timeout_s
 
     # -- write ---------------------------------------------------------------------------
 
@@ -82,7 +125,7 @@ class JsonlAuditStore:
         """Append one event. ``fields`` must not contain ``seq``, ``prev`` or ``hash``."""
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
-            with _exclusive_lock(self._dir / ".lock"):
+            with _exclusive_lock(self._dir / ".lock", self._lock_timeout_s):
                 files = self._files()
                 seq, prev = self._tail_state(files)
                 data = {**fields, "seq": seq + 1, "prev": prev}

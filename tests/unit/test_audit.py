@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -531,3 +532,88 @@ def test_service_verify_and_anchor(audit: AuditLog, policy: OperationPolicy) -> 
     seq, digest = audit.anchor()
     assert seq == 2 and len(digest) == 64
     assert audit.verify().last_hash == digest
+
+
+# -- lock behaviour -----------------------------------------------------------------------
+
+
+def test_a_held_lock_makes_appends_time_out_with_a_clear_error(audit_dir: Path) -> None:
+    from aios.adapters.audit_store import _exclusive_lock
+
+    store = JsonlAuditStore(audit_dir, lock_timeout_s=0.3)
+    store.append(draft(1))
+    failures: list[BaseException] = []
+
+    def contender() -> None:
+        try:
+            store.append(draft(2))
+        except BaseException as exc:
+            failures.append(exc)
+
+    with _exclusive_lock(audit_dir / ".lock", 5.0):  # another writer holds the lock
+        thread = threading.Thread(target=contender)
+        started = time.monotonic()
+        thread.start()
+        thread.join(timeout=10)
+        waited = time.monotonic() - started
+    assert len(failures) == 1 and isinstance(failures[0], AuditError)
+    assert "timed out" in str(failures[0]) and "audit lock" in str(failures[0])
+    assert 0.25 <= waited < 5
+    assert store.append(draft(3)).seq == 2  # the lock was released cleanly; nothing was lost
+    assert store.verify().ok
+
+
+def test_many_writers_survive_a_slow_disk(audit_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Writers queue behind a slow fsync for longer than a single wait; none may fail."""
+    real_fsync = os.fsync
+
+    def slow_fsync(fd: int) -> None:
+        time.sleep(0.03)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", slow_fsync)
+    store = JsonlAuditStore(audit_dir, lock_timeout_s=60)
+    errors: list[BaseException] = []
+
+    def worker(n: int) -> None:
+        try:
+            for i in range(4):
+                store.append(draft(n * 10 + i))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    result = store.verify()
+    assert result.ok and result.events == 80
+
+
+def test_a_lock_held_by_another_process_times_out_then_recovers(audit_dir: Path) -> None:
+    """The OS-level lock path: a different process holds the audit lock."""
+    store = JsonlAuditStore(audit_dir, lock_timeout_s=0.4)
+    store.append(draft(1))
+    holder_code = (
+        "import sys, time\nfrom pathlib import Path\n"
+        "from aios.adapters.audit_store import _exclusive_lock\n"
+        "with _exclusive_lock(Path(sys.argv[1]), 10):\n"
+        "    print('locked', flush=True)\n    time.sleep(float(sys.argv[2]))\n"
+    )
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_code, str(audit_dir / ".lock"), "2.0"],
+        stdout=subprocess.PIPE,
+    )
+    assert holder.stdout is not None
+    try:
+        assert holder.stdout.readline().strip() == b"locked"
+        started = time.monotonic()
+        with pytest.raises(AuditError, match="timed out"):
+            store.append(draft(2))
+        assert 0.3 <= time.monotonic() - started < 1.9  # gave up on our own timeout, not theirs
+    finally:
+        holder.wait(timeout=30)
+    assert store.append(draft(3)).seq == 2  # after the holder exits, writing works again
+    assert store.verify().ok
