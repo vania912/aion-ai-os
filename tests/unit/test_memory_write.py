@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from aios.adapters import memory_writer
 from aios.adapters.filelock import exclusive_lock
 from aios.adapters.memory_files import parse_record, scan_memory
+from aios.domain.memory import decision_digest
 from aios.errors import AuditError, InvalidRequestError, UnknownRecordError
 from aios.services.memory import MemoryService
 from aios.services.memory_write import (
@@ -23,7 +24,6 @@ from aios.services.memory_write import (
     MemoryWriter,
     NewRecord,
     WriteConfig,
-    decision_digest,
 )
 
 TODAY = date(2026, 11, 3)

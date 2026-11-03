@@ -19,10 +19,16 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aios.adapters.memory_files import PROJECTS_DIRNAME
 from aios.adapters.memory_writer import edit_front_matter
-from aios.domain.memory import TYPE_DIR, LoadedRecord, MemoryHit, MemoryRecord
+from aios.domain.memory import (
+    TYPE_DIR,
+    LoadedRecord,
+    MemoryHit,
+    MemoryRecord,
+    decision_digest,
+)
 from aios.errors import InvalidRequestError, MemoryStoreError, UnknownRecordError
 from aios.services.memory import MemoryService
-from aios.services.memory_write import MemoryWriter, decision_digest
+from aios.services.memory_write import MemoryWriter
 
 REJECTED_DIRNAME = "_rejected"
 _MOVE_ATTEMPTS = 5

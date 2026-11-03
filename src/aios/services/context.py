@@ -7,6 +7,7 @@ description and memory sections, with the git section listed under ``unavailable
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, date, datetime
 
 from aios.domain.context import GitSummary, ProjectContext
 from aios.domain.memory import MemoryHit
@@ -26,8 +27,17 @@ def build_context(
     memory: MemoryService,
     recent_commits: int = 5,
     per_section: int = 8,
+    today: date | None = None,
 ) -> ProjectContext:
     unavailable: dict[str, str] = {}
+    state = None
+    state_age: int | None = None
+    try:
+        state = memory.project_state(project_id)
+        if state is not None and state.updated is not None:
+            state_age = ((today or datetime.now(UTC).date()) - state.updated).days
+    except AiosError as exc:
+        unavailable["state"] = str(exc)
     git_summary = None
     recent = []
 
@@ -83,6 +93,8 @@ def build_context(
         open_questions=records("questions", "question", ("open",), per_section),
         constraints=records("constraints", "constraint", ("active",), per_section),
         awaiting_review=records("awaiting_review", None, (None,), per_section, reviewed=False),
+        state=state,
+        state_age_days=state_age,
         unavailable=unavailable,
     )
 
@@ -90,6 +102,30 @@ def build_context(
 def _hit_line(h: MemoryHit) -> str:
     marks = [h.status] + ([] if h.reviewed else [f"unreviewed, {h.origin}"])
     return f"- {h.id} [{', '.join(marks)}] {h.date} {h.title}"
+
+
+def _quote(text: str) -> list[str]:
+    return [f"> {line}" for line in text.splitlines()]
+
+
+def _render_state(ctx: ProjectContext) -> list[str]:
+    state = ctx.state
+    assert state is not None
+    if state.updated is None:
+        when = "no update date"
+    else:
+        when = f"updated {state.updated.isoformat()}, {ctx.state_age_days} days ago"
+    lines = [f"## Project state (hand-maintained file, {when}; aios does not verify it)"]
+    # Every line is quoted so file text cannot start its own heading or list entry in the snapshot.
+    if state.summary:
+        lines += _quote(state.summary)
+    if state.architecture:
+        lines += _quote("Architecture: " + state.architecture)
+    if state.known_constraints:
+        lines.append("Known constraints:")
+        lines += _quote("\n".join(f"- {c}" for c in state.known_constraints))
+    lines.append("")
+    return lines
 
 
 def render_context(ctx: ProjectContext) -> str:
@@ -115,6 +151,8 @@ def render_context(ctx: ProjectContext) -> str:
             more = f" +{len(c.files) - 6} more" if len(c.files) > 6 else ""
             lines.append(f"- {c.short_hash} {c.date[:10]} {c.subject} [{files}{more}]{hidden}")
         lines.append("")
+    if ctx.state is not None:
+        lines += _render_state(ctx)
     for title, hits in (
         ("Active decisions", ctx.active_decisions),
         ("Proposed decisions", ctx.proposed_decisions),

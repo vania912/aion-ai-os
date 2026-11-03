@@ -17,7 +17,6 @@ This module never writes to a project repository, only to the memory area of the
 from __future__ import annotations
 
 import contextlib
-import hashlib
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
@@ -38,6 +37,7 @@ from aios.domain.memory import (
     LoadedRecord,
     MemoryRecord,
     RecordType,
+    decision_digest,
 )
 from aios.errors import InvalidRequestError, UnknownRecordError
 
@@ -104,13 +104,6 @@ class CreateResult(BaseModel):
     path: str  # relative to the data directory
     #: Steps that still need a human, or follow-up the caller should know about.
     notes: list[str] = Field(default_factory=list)
-
-
-def decision_digest(record: MemoryRecord) -> str:
-    """SHA-256 of the reasoning fields of a decision (used to detect later hand edits)."""
-    parts = [record.title, *record.why, "|", *record.alternatives_considered, "|", record.body,
-             "|", record.supersedes or ""]  # fmt: skip
-    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 
 class MemoryWriter:

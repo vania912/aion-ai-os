@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Callable
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from aios.adapters.memory_files import (
@@ -19,6 +20,7 @@ from aios.adapters.memory_files import (
     scan_memory,
 )
 from aios.adapters.memory_index import MemoryIndex, build_match, query_terms
+from aios.adapters.project_state import load_state
 from aios.domain.memory import (
     ID_RE,
     TYPE_DIR,
@@ -33,9 +35,11 @@ from aios.domain.memory import (
     MemoryRecord,
     MemoryRecordView,
     SearchResult,
+    decision_digest,
 )
 from aios.domain.models import Issue, Registry, Severity
-from aios.errors import InvalidRequestError, UnknownRecordError
+from aios.domain.state import STATE_FILENAME, ProjectState
+from aios.errors import InvalidRequestError, MemoryStoreError, UnknownRecordError
 
 _ID_IN_TEXT = re.compile(r"\b(?:DEC|ASM|CON|Q|DSC|TSK|NOTE)-\d{4,}\b", re.IGNORECASE)
 _PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -308,8 +312,16 @@ class MemoryService:
 
     # -- integrity -----------------------------------------------------------------------
 
-    def check(self) -> list[Issue]:
+    def project_state(self, project: str) -> ProjectState | None:
+        """The hand-maintained state file of a project (None if there is none).
+
+        Raises ``MemoryStoreError`` if the file exists but cannot be used.
+        """
+        return load_state(self._data_dir, project)
+
+    def check(self, *, today: date | None = None) -> list[Issue]:
         """Read the files directly (not the index) and report problems."""
+        now = today or datetime.now(UTC).date()
         scan = scan_memory(self._data_dir, max_file_bytes=self._cfg.max_file_bytes)
         issues = list(scan.issues)
         by_id = {x.record.id: x.record for x in scan.records}
@@ -352,6 +364,24 @@ class MemoryService:
                     "a rejection was recorded but the file was not moved; "
                     "run `aios review reject` again",
                 )
+            if (
+                r.type == "decision"
+                and r.accepted_digest is not None
+                and decision_digest(r) != r.accepted_digest
+            ):
+                warn(
+                    r,
+                    "accepted_digest_mismatch",
+                    "its title, reasons, alternatives, body or 'supersedes' changed after "
+                    "it was accepted; check the edit is intended (git diff in the data repo)",
+                )
+            if not r.reviewed and (now - r.date).days > self._cfg.stale_proposal_days:
+                warn(
+                    r,
+                    "stale_proposal",
+                    f"awaiting review for {(now - r.date).days} days "
+                    f"(limit {self._cfg.stale_proposal_days}); accept or reject it",
+                )
             if r.origin == "claude" and r.reviewed and not r.accepted_by:
                 warn(
                     r,
@@ -367,6 +397,8 @@ class MemoryService:
                     "multiple_successors",
                     f"{target_id} is replaced by several decisions: {', '.join(sorted(succ))}",
                 )
+
+        issues += self._check_state_files(by_id, now)
 
         waiting: dict[str, int] = {}
         for r in by_id.values():
@@ -384,6 +416,33 @@ class MemoryService:
                 if cycle:
                     reported.update(cycle)
                     err(r, "supersession_cycle", "cycle: " + " -> ".join([*cycle, cycle[0]]))
+        return issues
+
+    def _check_state_files(self, by_id: dict[str, MemoryRecord], now: date) -> list[Issue]:
+        projects = {r.project for r in by_id.values()}
+        if self._registry is not None:
+            projects |= set(self._registry.projects)
+        root = self._data_dir / PROJECTS_DIRNAME
+        if root.is_dir():
+            projects |= {p.name for p in root.iterdir() if p.is_dir() and not p.is_symlink()}
+        issues: list[Issue] = []
+        for project in sorted(projects):
+            try:
+                state = self.project_state(project)
+            except MemoryStoreError as exc:
+                issues.append(Issue(project, Severity.ERROR, "invalid_state", str(exc)))
+                continue
+            if state is None:
+                continue
+            if state.updated is None:
+                msg = f"{STATE_FILENAME} has no 'updated' date, so it cannot be checked for age"
+                issues.append(Issue(project, Severity.WARNING, "state_undated", msg))
+            elif (now - state.updated).days > self._cfg.stale_state_days:
+                msg = (
+                    f"{STATE_FILENAME} was last confirmed {(now - state.updated).days} days ago "
+                    f"(limit {self._cfg.stale_state_days}); re-read it and update 'updated'"
+                )
+                issues.append(Issue(project, Severity.WARNING, "stale_state", msg))
         return issues
 
     # -- helpers -------------------------------------------------------------------------

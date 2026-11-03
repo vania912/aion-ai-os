@@ -10,11 +10,12 @@ import pytest
 
 from aios.adapters import memory_writer
 from aios.adapters.memory_files import parse_record, scan_memory
+from aios.domain.memory import decision_digest
 from aios.errors import InvalidRequestError, MemoryStoreError, UnknownRecordError
 from aios.services import memory_review
 from aios.services.memory import MemoryService
 from aios.services.memory_review import MemoryReviewer
-from aios.services.memory_write import MemoryWriter, NewRecord, decision_digest
+from aios.services.memory_write import MemoryWriter, NewRecord
 
 TODAY = date(2026, 11, 3)
 

@@ -4,6 +4,7 @@ import contextlib
 import os
 import sqlite3
 import threading
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,9 @@ from aios.services.memory import MemoryService
 from tests.memory_helpers import write_record
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# The record helpers date everything 2026-10; a fixed 'today' keeps the age checks deterministic.
+CHECK_DAY = date(2026, 10, 5)
 
 
 @pytest.fixture
@@ -436,7 +440,7 @@ def test_example_memory_is_valid_and_searchable() -> None:
 def _check(tmp_path: Path, *records: dict[str, object], registry: Registry | None = None) -> list:  # type: ignore[type-arg]
     for rec in records:
         write_record(tmp_path, **rec)  # type: ignore[arg-type]
-    return MemoryService(tmp_path, registry=registry).check()
+    return MemoryService(tmp_path, registry=registry).check(today=CHECK_DAY)
 
 
 def _rec(id: str, **fields: object) -> dict[str, object]:
@@ -521,9 +525,11 @@ def test_inconsistent_status_is_an_error_but_missing_backlink_is_a_warning(tmp_p
 
 def test_unknown_project_warning_needs_a_registry(tmp_path: Path) -> None:
     write_record(tmp_path, id="DEC-0001", project="ghost")
-    assert "unknown_project" not in codes(MemoryService(tmp_path).check())
+    assert "unknown_project" not in codes(MemoryService(tmp_path).check(today=CHECK_DAY))
     registry = Registry.model_validate({"projects": {"pulse": {"path": "/x"}}})
-    assert "unknown_project" in codes(MemoryService(tmp_path, registry=registry).check())
+    assert "unknown_project" in codes(
+        MemoryService(tmp_path, registry=registry).check(today=CHECK_DAY)
+    )
 
 
 def test_scan_reports_file_problems(tmp_path: Path) -> None:
@@ -588,7 +594,9 @@ def test_review_invariants_are_checked(tmp_path: Path) -> None:
     )  # reviewed, nobody accepted
     write_record(tmp_path, id="DEC-0003", origin="claude", reviewed=True, accepted_by="Vania")
     write_record(tmp_path, id="DEC-0004", status="proposed", origin="claude", reviewed=False)
-    found = {(i.code, i.message.split(":")[0]) for i in MemoryService(tmp_path).check()}
+    found = {
+        (i.code, i.message.split(":")[0]) for i in MemoryService(tmp_path).check(today=CHECK_DAY)
+    }
     assert ("unreviewed_active", "DEC-0001") in found
     assert ("reviewed_without_acceptance", "DEC-0002") in found
     assert not any(m in ("DEC-0003", "DEC-0004") for _, m in found)
@@ -607,7 +615,9 @@ def test_a_review_backlog_is_reported_per_project(tmp_path: Path) -> None:
     write_record(
         tmp_path, id="NOTE-0100", type="note", project="blueprint", origin="claude", reviewed=False
     )
-    backlog = [i for i in MemoryService(tmp_path).check() if i.code == "review_backlog"]
+    backlog = [
+        i for i in MemoryService(tmp_path).check(today=CHECK_DAY) if i.code == "review_backlog"
+    ]
     assert [(i.project_id, i.severity.value) for i in backlog] == [("pulse", "warning")]
     assert "20 records" in backlog[0].message
 
@@ -633,8 +643,8 @@ def test_a_pending_superseding_proposal_does_not_trigger_reciprocity_warnings(
         tmp_path, id="DEC-0002", title="New", status="proposed", origin="claude", reviewed=False,
         supersedes="DEC-0001", evidence=["e"],
     )  # fmt: skip
-    assert MemoryService(tmp_path).check() == []
+    assert MemoryService(tmp_path).check(today=CHECK_DAY) == []
     # ...but once the successor is in force, an unfinished predecessor IS reported.
     write_record(tmp_path, id="DEC-0002", title="New", supersedes="DEC-0001")
-    found = {i.code for i in MemoryService(tmp_path).check()}
+    found = {i.code for i in MemoryService(tmp_path).check(today=CHECK_DAY)}
     assert {"not_reciprocal", "predecessor_not_superseded"} <= found

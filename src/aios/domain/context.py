@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aios.domain.git import CommitChanges
 from aios.domain.memory import MemoryHit
+from aios.domain.state import ProjectState
 
 _FROZEN = ConfigDict(frozen=True)
 
@@ -39,5 +40,9 @@ class ProjectContext(BaseModel):
     constraints: list[MemoryHit] = Field(default_factory=list)
     #: Unreviewed records (for example Claude's proposals). Never counted as established above.
     awaiting_review: list[MemoryHit] = Field(default_factory=list)
+    #: The hand-maintained state file, if the project has one. Unverified by aios.
+    state: ProjectState | None = None
+    #: Days since the state file's `updated` date (None if undated).
+    state_age_days: int | None = None
     #: section name -> why it could not be built (the rest of the snapshot is still returned)
     unavailable: dict[str, str] = Field(default_factory=dict)

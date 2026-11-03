@@ -106,6 +106,25 @@ def project_list(data_dir: DataDirOption = None) -> None:
         typer.echo(f"{project_id}\t{project.path}\t{project.description}")
 
 
+@project_app.command("state")
+def project_state(
+    project: Annotated[str, typer.Argument(help="Project id.")],
+    data_dir: DataDirOption = None,
+) -> None:
+    """Show a project's hand-maintained state file (projects/<project>/state.yaml)."""
+    registry = _load(data_dir)
+    try:
+        registry.get(project)  # unknown project -> clear error
+        state = _memory(data_dir).project_state(project)
+    except AiosError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    if state is None:
+        typer.echo(f"no state file: create projects/{project}/state.yaml (see docs/MEMORY.md)")
+        return
+    typer.echo(state.model_dump_json(indent=2, exclude_none=True))
+
+
 @app.command()
 def doctor(data_dir: DataDirOption = None) -> None:
     """Check the registry and the memory store. Exit code 1 if any error is found."""

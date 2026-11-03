@@ -6,6 +6,7 @@ Records are Markdown files with YAML front matter; these models validate the fro
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import re
 from typing import Literal
 
@@ -258,6 +259,10 @@ class MemoryConfig(BaseModel):
     max_query_terms: int = 12
     max_query_chars: int = 300
     max_file_bytes: int = 256 * 1024
+    #: `aios doctor` warns about unreviewed records older than this many days.
+    stale_proposal_days: int = 14
+    #: ... and about a project state file whose `updated` date is older than this.
+    stale_state_days: int = 90
 
 
 class MemoryHit(BaseModel):
@@ -341,3 +346,10 @@ class IndexStats(BaseModel):
     record_count: int
     issue_count: int
     built_at: str
+
+
+def decision_digest(record: MemoryRecord) -> str:
+    """SHA-256 of the reasoning fields of a decision (used to detect later hand edits)."""
+    parts = [record.title, *record.why, "|", *record.alternatives_considered, "|", record.body,
+             "|", record.supersedes or ""]  # fmt: skip
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
