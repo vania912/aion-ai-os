@@ -15,6 +15,7 @@ from aios.domain.models import ProjectConfig
 from aios.errors import AiosError
 from aios.services.git import GitService
 from aios.services.memory import MemoryService
+from aios.services.plans import PlanService
 
 _OPEN_TASK_STATUSES = ("in_progress", "blocked", "open")
 
@@ -28,8 +29,15 @@ def build_context(
     recent_commits: int = 5,
     per_section: int = 8,
     today: date | None = None,
+    plans: PlanService | None = None,
 ) -> ProjectContext:
     unavailable: dict[str, str] = {}
+    open_plans = []
+    if plans is not None:
+        try:
+            open_plans = plans.list_plans(project=project_id, open_only=True, limit=per_section)
+        except AiosError as exc:
+            unavailable["plans"] = str(exc)
     state = None
     state_age: int | None = None
     try:
@@ -93,6 +101,7 @@ def build_context(
         open_questions=records("questions", "question", ("open",), per_section),
         constraints=records("constraints", "constraint", ("active",), per_section),
         awaiting_review=records("awaiting_review", None, (None,), per_section, reviewed=False),
+        plans=open_plans,
         state=state,
         state_age_days=state_age,
         unavailable=unavailable,
@@ -102,6 +111,21 @@ def build_context(
 def _hit_line(h: MemoryHit) -> str:
     marks = [h.status] + ([] if h.reviewed else [f"unreviewed, {h.origin}"])
     return f"- {h.id} [{', '.join(marks)}] {h.date} {h.title}"
+
+
+def _render_plans(ctx: ProjectContext) -> list[str]:
+    lines = ["## Plans (open; an approval is a record, not enforced by aios)"]
+    for p in ctx.plans:
+        if p.status == "proposed":
+            mark = f"proposed, NOT approved, tier {p.tier}, {p.origin}"
+        elif p.status == "approved":
+            mark = f"approved (recorded), tier {p.tier}, no outcome yet"
+        else:
+            mark = f"{p.status}, tier {p.tier}"
+        stale = ", APPROVAL STALE" if p.approval_stale else ""
+        lines.append(f"- {p.id} [{mark}{stale}] {p.created} {p.title}")
+    lines.append("")
+    return lines
 
 
 def _quote(text: str) -> list[str]:
@@ -153,6 +177,8 @@ def render_context(ctx: ProjectContext) -> str:
         lines.append("")
     if ctx.state is not None:
         lines += _render_state(ctx)
+    if ctx.plans:
+        lines += _render_plans(ctx)
     for title, hits in (
         ("Active decisions", ctx.active_decisions),
         ("Proposed decisions", ctx.proposed_decisions),

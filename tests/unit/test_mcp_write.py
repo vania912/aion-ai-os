@@ -16,7 +16,14 @@ from aios.services.memory_review import MemoryReviewer
 from aios.services.memory_write import MemoryWriter, WriteConfig
 from tests.mcp_helpers import World, call, make_world, run
 
-WRITE_TOOLS = ("propose_decision", "propose_task", "propose_memory_item", "update_task_status")
+WRITE_TOOLS = (
+    "propose_decision",
+    "propose_task",
+    "propose_memory_item",
+    "update_task_status",
+    "create_plan",
+    "record_verification",
+)
 
 
 @pytest.fixture
@@ -58,7 +65,8 @@ def test_without_the_flag_there_are_no_write_tools_and_the_policy_denies_them(
         assert not w.ctx.policy.authorize(op).allowed
     with pytest.raises(ToolError):
         call(w, "propose_task", project="pulse", title="x")
-    assert "PROPOSE" not in (w.server.instructions or "").upper().replace("PROPOSING", "")
+    assert "--allow-propose" not in (w.server.instructions or "")
+    assert "create_plan" not in (w.server.instructions or "")
 
 
 def test_with_the_flag_the_write_tools_exist_and_are_marked_as_writes(world: World) -> None:

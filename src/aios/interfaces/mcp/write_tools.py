@@ -16,14 +16,17 @@ as text. The audit log records ids, types and sizes, never the content.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Annotated, Any, Literal, TypeVar
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aios.domain.memory import MemoryHit
+from aios.domain.plans import PlanContent, PlanFile, StepReport, Tier
+from aios.errors import InvalidRequestError
 from aios.interfaces.mcp.context import ServerContext
 from aios.interfaces.mcp.render import compact
 from aios.services.memory_write import CreateResult, NewRecord
@@ -263,3 +266,119 @@ def register_write_tools(server: MCPServer, ctx: ServerContext) -> None:
                 summarize=lambda u: {"id": u.id, "status": u.status},
             )
         )
+
+    @tool("create_plan", "Propose a change plan")
+    def create_plan(
+        project: Project,
+        title: Title,
+        request: Annotated[str, Field(description="What the user asked for, in their terms.")],
+        what_will_change: Annotated[str, Field(description="What will be changed, concretely.")],
+        why: Annotated[str, Field(description="Why this change.")],
+        risks: Annotated[list[str], Field(description="Risks, one line each (at least one).")],
+        expected_result: Annotated[str, Field(description="What should be true afterwards.")],
+        verification: Annotated[
+            list[str],
+            Field(description="Numbered checks to run afterwards, one line each (at least one)."),
+        ],
+        files: Annotated[
+            list[PlanFile],
+            Field(description="Every file that will be created, modified or deleted (max 50)."),
+        ] = [],  # noqa: B006
+        requested_tier: Annotated[
+            Tier | None, Field(description="R1/R2/R3. Can only raise the computed risk tier.")
+        ] = None,
+        related_decisions: Annotated[list[str], Field(description="Existing DEC ids.")] = [],  # noqa: B006
+        related_tasks: Annotated[list[str], Field(description="Existing TSK ids.")] = [],  # noqa: B006
+        evidence: Evidence = [],  # noqa: B006
+        revises: Annotated[
+            str | None,
+            Field(description="Plan id this replaces (it can then no longer be approved)."),
+        ] = None,
+    ) -> str:
+        """Write a change plan as an UNAPPROVED proposal. This does not change any project file. A
+        person must approve the exact plan (aios plan approve) before anything is done; approval is
+        bound to the plan's content hash. List every affected file honestly: the risk tier is
+        computed from them. Call get_plan or list_plans first to avoid duplicates. Do not start the
+        work until get_plan shows the plan as approved by a person."""
+
+        def go() -> dict[str, object]:
+            try:
+                content = PlanContent(
+                    project=project, title=title, request=request,
+                    what_will_change=what_will_change, why=why, files=files, risks=risks,
+                    expected_result=expected_result, verification=verification,
+                    requested_tier=requested_tier, related_decisions=related_decisions,
+                    related_tasks=related_tasks, evidence=evidence, revises=revises,
+                )  # fmt: skip
+            except ValidationError as exc:
+                detail = "; ".join(
+                    f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+                )
+                raise InvalidRequestError(f"invalid plan: {detail}") from None
+            view = ctx.plans().create(content, origin="claude")
+            return {
+                "id": view.plan.id,
+                "status": view.status,
+                "tier": view.tier,
+                "tier_reasons": view.tier_reasons,
+                "plan_hash": view.plan_hash,
+                "note": (
+                    "UNAPPROVED proposal. Nothing has been changed and you may not start the "
+                    "work. Tell the user the plan id and ask them to review and approve it."
+                ),
+                "next_steps": [
+                    f"human: aios plan show {view.plan.id}",
+                    f"human: aios plan approve {view.plan.id}  (or: aios plan reject)",
+                ],
+            }
+
+        args = {
+            "project": project,
+            "title_chars": len(title),
+            "files": len(files),
+            "risks": len(risks),
+            "verification": len(verification),
+            "revises": revises,
+        }
+        out = ctx.run(
+            "create_plan", go, project=project, args=args,
+            summarize=lambda r: {"id": str(r["id"]), "tier": str(r["tier"])},
+        )  # fmt: skip
+        return json.dumps(out, separators=(",", ":"))
+
+    @tool("record_verification", "Report verification results")
+    def record_verification(
+        plan_id: Annotated[str, Field(description="Plan id such as PLAN-0001.")],
+        results: Annotated[
+            list[StepReport],
+            Field(
+                description=(
+                    "One entry per verification step you actually ran: step number, "
+                    "outcome (pass, fail, not_run) and evidence (what you ran and saw)."
+                )
+            ),
+        ],
+    ) -> str:
+        """File the results of the plan's verification steps. This is a CLAIM that a person reviews;
+        it does not mark the plan verified or executed. Report honestly: use fail or not_run for
+        anything that did not pass or that you did not run, with the real evidence. The plan must be
+        approved by a person first."""
+
+        def go() -> dict[str, object]:
+            view = ctx.plans().record_report(plan_id, results, actor="mcp", by="claude")
+            last = view.reports[-1]
+            return {
+                "id": view.plan.id,
+                "status": view.status,
+                "report_all_steps_pass": last.all_pass,
+                "note": (
+                    "Recorded as an unverified claim. Only a person can mark the plan "
+                    "verified (aios plan verify)."
+                ),
+            }
+
+        out = ctx.run(
+            "record_verification", go, args={"plan_id": plan_id, "steps": len(results)},
+            summarize=lambda r: {"id": str(r["id"]), "all_pass": bool(r["report_all_steps_pass"])},
+        )  # fmt: skip
+        return json.dumps(out, separators=(",", ":"))

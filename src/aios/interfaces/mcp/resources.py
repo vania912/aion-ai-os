@@ -58,6 +58,7 @@ def _context(ctx: ServerContext, project: str) -> str:
             config,
             git=(lambda: ctx.git(project)) if config.git else None,
             memory=ctx.memory,
+            plans=ctx.plans(),
         )
     )
 

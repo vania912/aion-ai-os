@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aios.domain.git import CommitChanges
 from aios.domain.memory import MemoryHit
+from aios.domain.plans import PlanSummary
 from aios.domain.state import ProjectState
 
 _FROZEN = ConfigDict(frozen=True)
@@ -40,6 +41,8 @@ class ProjectContext(BaseModel):
     constraints: list[MemoryHit] = Field(default_factory=list)
     #: Unreviewed records (for example Claude's proposals). Never counted as established above.
     awaiting_review: list[MemoryHit] = Field(default_factory=list)
+    #: Open plans: waiting for approval, or approved and not yet finished.
+    plans: list[PlanSummary] = Field(default_factory=list)
     #: The hand-maintained state file, if the project has one. Unverified by aios.
     state: ProjectState | None = None
     #: Days since the state file's `updated` date (None if undated).

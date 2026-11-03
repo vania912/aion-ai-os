@@ -26,6 +26,7 @@ from aios.services.files import FileService
 from aios.services.git import GitService, build_git_service
 from aios.services.memory import MemoryService
 from aios.services.memory_write import MemoryWriter
+from aios.services.plans import PlanService
 from aios.services.registry import load_registry
 
 T = TypeVar("T")
@@ -48,6 +49,8 @@ TOOL_NAMES = (
     "list_memory",
     "get_memory_record",
     "get_decision_history",
+    "list_plans",
+    "get_plan",
 )
 OPERATIONS = (*TOOL_NAMES, "read_resource", "get_prompt")
 #: Operations the write tools use. They are PROPOSE level: they can only create
@@ -58,6 +61,8 @@ PROPOSE_OPERATIONS = (
     "propose_task",
     "propose_memory_item",
     "update_task_status",
+    "create_plan",
+    "record_verification",
 )
 
 
@@ -82,6 +87,10 @@ class ServerContext:
         self._registry: tuple[tuple[int, int], Registry] | None = None
         self._files: dict[tuple[str, str], FileService] = {}
         self._git: dict[tuple[str, str], GitService] = {}
+
+    def plans(self) -> PlanService:
+        """A plan service bound to the current registry (cheap: it holds no state)."""
+        return PlanService(self.data_dir, registry=self.registry())
 
     # -- registry and per-project services -----------------------------------------------
 
