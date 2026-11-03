@@ -8,6 +8,7 @@ Nothing here writes to project repositories; the only thing written is the deriv
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -54,6 +55,7 @@ class MemoryService:
         self._registry = registry
         self._cfg = config if config is not None else MemoryConfig()
         self._index = MemoryIndex(data_dir / INDEX_DIRNAME / "aios.sqlite")
+        self._rebuild_lock = threading.Lock()  # tool calls may run on several threads
 
     # -- index management ----------------------------------------------------------------
 
@@ -74,9 +76,15 @@ class MemoryService:
         return status, stale
 
     def _ensure_fresh(self) -> None:
+        if not self._is_stale():
+            return
+        with self._rebuild_lock:
+            if self._is_stale():  # another thread may have rebuilt while we waited
+                self.rebuild_index()
+
+    def _is_stale(self) -> bool:
         status = self._index.status()
-        if status is None or status.fingerprint != compute_fingerprint(self._data_dir):
-            self.rebuild_index()
+        return status is None or status.fingerprint != compute_fingerprint(self._data_dir)
 
     # -- queries -------------------------------------------------------------------------
 

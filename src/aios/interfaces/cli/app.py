@@ -503,7 +503,11 @@ def _audit(data_dir: Path | None) -> AuditLog:
 
 
 def _fmt_args(values: Mapping[str, object]) -> str:
-    return " ".join(f"{k}={str(v)[:60]!r}" for k, v in values.items())
+    parts = []
+    for key, value in values.items():
+        shown = repr(value[:60]) if isinstance(value, str) else repr(value)  # None stays None
+        parts.append(f"{key}={shown}")
+    return " ".join(parts)
 
 
 def _echo_event(e: AuditEvent) -> None:
@@ -574,3 +578,16 @@ def audit_anchor(data_dir: DataDirOption = None) -> None:
     with _cli_errors():
         seq, digest = audit.anchor()
     typer.echo(f"seq: {seq}\nhash: {digest or '(empty log)'}")
+
+
+@app.command()
+def serve(data_dir: DataDirOption = None) -> None:
+    """Run the MCP server over stdio (Claude Code starts this; see docs/MCP.md)."""
+    settings = _settings(data_dir)
+    try:
+        from aios.interfaces.mcp.server import serve as run_server
+
+        run_server(settings.data_dir)
+    except AiosError as exc:
+        typer.echo(f"error: {exc}", err=True)  # stderr: stdout belongs to the protocol
+        raise typer.Exit(code=1) from exc

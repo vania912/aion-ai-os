@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import time
+import uuid
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -59,7 +60,7 @@ _STOPWORDS = frozenset(
         "what", "when", "where", "which", "who", "why", "will", "with", "would", "you", "your",
     ]
 )  # fmt: skip
-_SNIPPET_COLUMN = 1  # body
+_SNIPPET_COLUMN = -1  # FTS5 picks the best-matching column
 
 
 def query_terms(text: str, *, max_terms: int) -> list[str]:
@@ -87,7 +88,7 @@ class MemoryIndex:
         ignore = self.path.parent / ".gitignore"  # keep the derived cache out of a data repo
         if not ignore.exists():
             ignore.write_text("*\n", encoding="utf-8")
-        tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+        tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
         tmp.unlink(missing_ok=True)
         built_at = datetime.now(UTC).isoformat(timespec="seconds")
         conn = sqlite3.connect(tmp)

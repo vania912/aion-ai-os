@@ -107,3 +107,16 @@ def test_empty_audit_log(tmp_path: Path) -> None:
     assert run(empty, "audit", "verify")[1].strip() == "ok: 0 event(s), last seq 0"
     assert "(empty log)" in run(empty, "audit", "anchor")[1]
     assert run(empty, "audit", "list")[0] == 0
+
+
+def test_null_arguments_are_shown_as_null_not_as_the_string_none(tmp_path: Path) -> None:
+    d = tmp_path / "d"
+    d.mkdir()
+    AuditLog(d, actor="mcp").note("probe", args={"since": None, "limit": 5, "path": "a.py"})
+    out = run(d, "audit", "list")[1]
+    assert (
+        "since=None" in out
+        and "since='None'" not in out
+        and "limit=5" in out
+        and "path='a.py'" in out
+    )

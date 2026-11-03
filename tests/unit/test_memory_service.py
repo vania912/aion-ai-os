@@ -560,3 +560,22 @@ def test_symlinked_record_files_are_ignored(tmp_path: Path) -> None:
     link = data / "projects" / "pulse" / "decisions" / "DEC-0002.md"
     link.symlink_to(outside)
     assert [r.record.id for r in scan_memory(data).records] == ["DEC-0001"]
+
+
+def test_concurrent_queries_on_a_stale_index_do_not_collide(data: Path) -> None:
+    """Tool calls can run on several threads; they must not share a temp file or crash."""
+    errors: list[BaseException] = []
+    results: list[int] = []
+
+    def worker() -> None:
+        try:
+            results.append(len(MemoryService(data).search("slack").hits))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [] and len(set(results)) == 1 and results[0] > 0

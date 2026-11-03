@@ -38,6 +38,10 @@ extend-exclude = ["spikes"]  # throwaway spike scripts; they print by design
 # T20 forbids print(): stdout is the MCP protocol channel (see docs/spikes/PHASE1-SPIKES.md, S4).
 select = ["E", "F", "I", "UP", "B", "SIM", "T20", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+# Parameter descriptions are text shown to the model; wrapping them mid-sentence helps no one.
+"src/aios/interfaces/mcp/tools.py" = ["E501"]
+
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
