@@ -516,10 +516,10 @@ def test_scan_reports_project_mismatch(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(os.name != "posix", reason="symlink creation needs privileges on Windows")
 def test_symlinked_record_files_are_ignored(tmp_path: Path) -> None:
-    real = write_record(tmp_path, id="DEC-0001")
-    outside = tmp_path / "outside.md"
-    outside.write_text(real.read_text(), encoding="utf-8")
-    link = real.parent / "DEC-0002.md"
+    data = tmp_path / "data"
+    write_record(data, id="DEC-0001")
+    # A valid, *different* record living outside the store, reachable only through a symlink.
+    outside = write_record(tmp_path / "elsewhere", id="DEC-0002")
+    link = data / "projects" / "pulse" / "decisions" / "DEC-0002.md"
     link.symlink_to(outside)
-    ids = [r.record.id for r in scan_memory(tmp_path).records]
-    assert ids == ["DEC-0001"]
+    assert [r.record.id for r in scan_memory(data).records] == ["DEC-0001"]

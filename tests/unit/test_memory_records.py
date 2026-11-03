@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -132,7 +134,11 @@ def test_parse_reports_every_validation_problem() -> None:
     assert "status" in str(info.value) and "date" in str(info.value)
 
 
-def test_yaml_is_parsed_safely() -> None:
-    evil = GOOD.replace("title: T", "title: !!python/object/apply:os.system ['echo pwned']")
+def test_yaml_is_parsed_safely(tmp_path: Path) -> None:
+    marker = tmp_path / "pwned"
+    evil = GOOD.replace(
+        "title: T", f"title: !!python/object/apply:os.mkdir ['{marker.as_posix()}']"
+    )
     with pytest.raises(RecordParseError):
         parse_record(evil)
+    assert not marker.exists(), "YAML constructors must not execute code"
