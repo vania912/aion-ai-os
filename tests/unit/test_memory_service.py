@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import os
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,7 @@ from aios.adapters.memory_files import compute_fingerprint, scan_memory
 from aios.adapters.memory_index import MemoryIndex, build_match, query_terms
 from aios.domain.memory import MemoryConfig
 from aios.domain.models import Registry, Severity
-from aios.errors import InvalidRequestError, UnknownRecordError
+from aios.errors import InvalidRequestError, MemoryStoreError, UnknownRecordError
 from aios.services.memory import MemoryService
 from tests.memory_helpers import write_record
 
@@ -147,11 +148,46 @@ def test_corrupt_missing_and_old_schema_indexes_are_rebuilt(svc: MemoryService, 
     assert svc.search("slack").hits
     index.unlink()
     assert svc.search("slack").hits
-    with sqlite3.connect(index) as conn:
+    # `with sqlite3.connect(...)` only commits; it does not close. An open handle blocks the
+    # index replace on Windows, so close explicitly.
+    with contextlib.closing(sqlite3.connect(index)) as conn, conn:
         conn.execute("UPDATE meta SET value = '999' WHERE key = 'schema_version'")
     assert MemoryIndex(index).status() is None
     assert svc.search("slack").hits
     assert MemoryIndex(index).status() is not None
+
+
+def test_rebuild_succeeds_when_another_handle_closes_shortly(
+    svc: MemoryService, data: Path
+) -> None:
+    """On Windows an open handle blocks the atomic replace; the retry loop must outlast it."""
+    svc.rebuild_index()
+    index = data / ".index" / "aios.sqlite"
+    holder = sqlite3.connect(index)
+    holder.execute("SELECT count(*) FROM records").fetchone()  # genuinely opens the file
+    timer = threading.Timer(0.25, holder.close)
+    timer.start()
+    try:
+        assert svc.rebuild_index().record_count == 8
+    finally:
+        timer.join()
+        holder.close()
+    assert svc.search("slack").hits
+
+
+@pytest.mark.skipif(os.name != "nt", reason="POSIX allows replacing a file that is still open")
+def test_rebuild_reports_a_clear_error_when_the_index_stays_locked(
+    svc: MemoryService, data: Path
+) -> None:
+    svc.rebuild_index()
+    holder = sqlite3.connect(data / ".index" / "aios.sqlite")
+    holder.execute("SELECT count(*) FROM records").fetchone()
+    try:
+        with pytest.raises(MemoryStoreError, match="cannot replace index file"):
+            svc.rebuild_index()
+        assert [p for p in (data / ".index").iterdir() if p.suffix == ".tmp"] == []
+    finally:
+        holder.close()
 
 
 def test_failed_rebuild_leaves_no_temp_file_and_keeps_the_old_index(
