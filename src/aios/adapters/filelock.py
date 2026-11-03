@@ -74,7 +74,7 @@ def exclusive_lock(path: Path, timeout_s: float, what: str = "lock") -> Iterator
     if not process_lock.acquire(timeout=timeout_s):
         raise AuditError(f"timed out after {timeout_s:g}s waiting for the {what}")
     try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
         try:
             while not _try_os_lock(fd):
                 if time.monotonic() >= deadline:

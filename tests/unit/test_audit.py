@@ -617,3 +617,12 @@ def test_a_lock_held_by_another_process_times_out_then_recovers(audit_dir: Path)
         holder.wait(timeout=30)
     assert store.append(draft(3)).seq == 2  # after the holder exits, writing works again
     assert store.verify().ok
+
+
+def test_audit_lines_are_written_byte_for_byte(audit_dir: Path, windows_text_mode: None) -> None:
+    store = JsonlAuditStore(audit_dir)
+    store.append(draft(1))
+    store.append(draft(2))
+    data = (audit_dir / "2026-11.jsonl").read_bytes()
+    assert b"\r" not in data and data.count(b"\n") == 2
+    assert store.verify().ok

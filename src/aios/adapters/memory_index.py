@@ -82,7 +82,7 @@ def ensure_cache_dir(directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     ignore = directory / ".gitignore"
     if not ignore.exists():
-        ignore.write_text("*\n", encoding="utf-8")
+        ignore.write_bytes(b"*\n")  # bytes: no newline translation on Windows
 
 
 class MemoryIndex:

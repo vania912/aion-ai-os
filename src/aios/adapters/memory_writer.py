@@ -38,6 +38,8 @@ _VALUE = (
     r"(?P<value>\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\n]|'')*'|[^#\s][^#\n]*?|)"  # quoted, plain, or empty
 )
 _REPLACE_ATTEMPTS = 5
+#: Windows opens files in text mode (LF -> CRLF on write) unless told otherwise; 0 elsewhere.
+_O_BINARY = getattr(os, "O_BINARY", 0)
 
 
 class UnsupportedEditError(MemoryStoreError):
@@ -114,7 +116,7 @@ def replace_atomic(path: Path, data: bytes, *, must_not_exist: bool = False) -> 
     """Write ``data`` to ``path`` via a temp file in the same directory and ``os.replace``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")  # not *.md: scans ignore it
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_BINARY, 0o666)
     try:
         try:
             os.write(fd, data)

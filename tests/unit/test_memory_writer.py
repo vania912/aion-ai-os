@@ -425,3 +425,30 @@ def test_repeated_edits_never_disturb_the_rest_of_the_file(tmp_path: Path) -> No
         removed, added = line_diff(SAMPLE, current)
         assert all(line.startswith(("status:", "superseded_by:")) for line in removed + added)
         assert parse_record(current).status == status and parse_record(current).superseded_by == by
+
+
+# -- Windows text-mode regression (found by the Windows CI runners) ------------------------------
+
+
+def test_data_is_written_byte_for_byte(tmp_path: Path, windows_text_mode: None) -> None:
+    """On Windows, os.open without O_BINARY turns LF into CRLF (and CRLF into CR CR LF)."""
+    replace_atomic(tmp_path / "x.md", b"a\nb\r\nc\n")
+    assert (tmp_path / "x.md").read_bytes() == b"a\nb\r\nc\n"
+
+
+def test_created_records_contain_no_carriage_returns(
+    tmp_path: Path, windows_text_mode: None
+) -> None:
+    path = create_record_file(tmp_path, rec(body="one\ntwo"))
+    assert b"\r" not in path.read_bytes()
+
+
+def test_a_crlf_file_stays_parseable_after_repeated_edits(
+    tmp_path: Path, windows_text_mode: None
+) -> None:
+    path = sample_file(tmp_path, SAMPLE.replace("\n", "\r\n"))
+    for status in ("deprecated", "active", "superseded"):
+        edit_front_matter(path, {"status": status})
+        data = path.read_bytes()
+        assert b"\r\r" not in data and data.count(b"\r\n") == data.count(b"\n")
+        assert parse_record(path.read_text(encoding="utf-8")).status == status

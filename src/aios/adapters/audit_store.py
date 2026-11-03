@@ -28,6 +28,8 @@ from aios.domain.audit import AuditEvent, VerifyProblem, VerifyResult
 from aios.errors import AuditError
 
 AUDIT_DIRNAME = "audit"
+#: Windows opens files in text mode (LF -> CRLF on write) unless told otherwise; 0 elsewhere.
+_O_BINARY = getattr(os, "O_BINARY", 0)
 _MONTH_FILE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])\.jsonl$")
 _TAIL_BYTES = 64 * 1024
 
@@ -93,7 +95,7 @@ class JsonlAuditStore:
             with path.open("rb") as f:
                 f.seek(-1, os.SEEK_END)
                 needs_newline = f.read(1) != b"\n"  # a torn write left no line ending
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | _O_BINARY, 0o600)
         try:
             os.write(fd, (b"\n" if needs_newline else b"") + line)
             os.fsync(fd)

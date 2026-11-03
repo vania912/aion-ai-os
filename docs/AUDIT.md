@@ -72,6 +72,12 @@ Microsoft's documentation as I remember it [not verified], is that this mode giv
 ten one-second retries, which many queued writers can exceed on a slow disk. The polling lock and
 the in-process queue replace it; the Windows CI result for that fix is the confirmation.
 
+## Windows note
+
+Audit lines are written through `os.open`, which on Windows is text mode unless `O_BINARY` is
+given; the store passes it so lines are byte-exact (found via the Phase 2a Windows CI run, which
+exercised the same pattern in the memory writer; a simulating test now covers the audit store).
+
 ## Retention
 
 Monthly files are never rotated, compressed or deleted automatically, and there is no size cap.

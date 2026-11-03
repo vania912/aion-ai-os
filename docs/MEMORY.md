@@ -187,7 +187,13 @@ history). Phase 2a adds about 265 tests (754 pass in total locally on Linux, 1 P
 
 19 deliberate breakages of the write path each make the suite fail. Two first survived because
 other checks masked them (the supersession status guard; id allocation over a `_rejected` folder);
-the tests were split so each rule is decided on its own, and the breakages are now caught. Writing
+the tests were split so each rule is decided on its own, and the breakages are now caught. The first
+Windows CI run then found a fourth, which Linux cannot show: files opened with `os.open` are in
+text mode on Windows unless `O_BINARY` is passed, so every `\n` the writer wrote became `\r\n` (and
+`\r\n` in a CRLF file became `\r\r\n`), after which the next edit could no longer parse the file
+(14 failures). The writer and the audit log now open data files in binary mode, and a test
+fixture simulates Windows text-mode descriptors so the regression is caught on Linux too
+(removing the flag fails four tests). Writing
 the suite also exposed three real defects, since fixed: a rejected decision could have been revived
 by completing its supersession, the editor reported a block-style value with a generic parse error,
 and accepting a Claude proposal did not require recording who accepted it.
