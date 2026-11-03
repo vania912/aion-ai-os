@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -23,13 +24,20 @@ FAKE_O_BINARY = 0x40000000  # a flag bit that no OS uses, standing in for Window
 
 
 @pytest.fixture
-def windows_text_mode(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+def windows_text_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Simulate Windows' CRT: a file descriptor opened *without* O_BINARY translates LF to CRLF
     on write. Code that writes data through ``os.open`` must pass the flag or it fails under this
     fixture, as it did on the Windows CI runners."""
     import os
 
     from aios.adapters import audit_store, memory_writer
+
+    if hasattr(os, "O_BINARY"):
+        # On real Windows there is nothing to simulate: the tests using this fixture then check
+        # that the *real* O_BINARY flag gives byte-exact files. (Faking it there would strip the
+        # real flag and make the CRT translate on top of the simulation.)
+        yield
+        return
 
     real_open, real_write, real_close = os.open, os.write, os.close
     text_fds: set[int] = set()
@@ -54,3 +62,4 @@ def windows_text_mode(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyp
     monkeypatch.setattr(os, "open", fake_open)
     monkeypatch.setattr(os, "write", fake_write)
     monkeypatch.setattr(os, "close", fake_close)
+    yield
