@@ -1,6 +1,7 @@
 # Phase 2 plan — persistent memory (writes)
 
-Status: **PROPOSAL, not approved.** Date: 2026-11-03. No Phase 2 code exists.
+Status: **D1–D4 decided by the user, D5–D7 assumed (see ADR-0009); awaiting your go to start 2a.**
+Date: 2026-11-03. No Phase 2 code exists.
 Legend: **[V]** verified against a source named in the text · **[U]** unverified or remembered ·
 **[J]** my judgement.
 
@@ -199,5 +200,5 @@ If you do not object, D5, D6 and D7 proceed as recommended.
 
 ## 10. After you decide
 
-I will record D1–D7 as an ADR (alternatives, reason, date, status), then start 2a. Nothing is
-built until you approve the plan.
+D1–D7 are recorded in [ADR-0009](adr/0009-phase2-write-model.md). I will start 2a when you say go;
+nothing is built before that.
