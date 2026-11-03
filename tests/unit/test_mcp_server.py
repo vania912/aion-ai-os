@@ -497,5 +497,5 @@ def test_propose_operations_are_denied_unless_the_server_is_started_with_the_fla
         not ctx.policy.authorize("write_file").allowed
         and not ctx.policy.authorize("git_push").allowed
     )
-    # Until the propose tools exist (2c) the flag adds no tools: the surface is unchanged.
-    assert len(run(server.list_tools())) == 14 and "READ-ONLY" in (server.instructions or "")
+    # The flag adds exactly the four propose/update tools (see test_mcp_write.py).
+    assert len(run(server.list_tools())) == 18 and "READ-ONLY" in (server.instructions or "")

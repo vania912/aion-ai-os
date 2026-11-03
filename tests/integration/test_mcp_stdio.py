@@ -162,7 +162,53 @@ def test_the_allow_propose_flag_is_accepted_and_recorded(world: World) -> None:
         async with Client(params) as client:
             return len((await client.list_tools()).tools)
 
-    assert asyncio.run(count_tools()) == 14  # no write tools exist yet
+    assert asyncio.run(count_tools()) == 18  # 14 read-only + 4 propose/update tools
     log = "".join(p.read_text(encoding="utf-8") for p in (world.data / "audit").glob("*.jsonl"))
     start = json.loads(log.splitlines()[0])
     assert start["op"] == "server_start" and start["args"]["allow_propose"] is True
+
+
+def test_propose_review_accept_history_over_stdio(world: World) -> None:
+    """propose (Claude, over stdio, with the flag) -> unreviewed -> human accepts -> history."""
+
+    async def propose() -> tuple[list[str], dict[str, Any], str]:
+        params = StdioServerParameters(
+            command=SERVE[0], args=[*SERVE[1:], "--allow-propose"], env=env_for(world.data)
+        )
+        async with Client(params) as client:
+            names = sorted(t.name for t in (await client.list_tools()).tools)
+            result = await client.call_tool(
+                "propose_decision",
+                {
+                    "project": "pulse",
+                    "title": "Route monitoring per region",
+                    "why": ["Regions have separate alert owners"],
+                    "evidence": ["DEC-0002"],
+                    "supersedes": "DEC-0002",
+                    "reason_for_change": "Alert ownership is regional",
+                },
+            )
+            before = await client.call_tool("get_decision_history", {"record_id": "DEC-0002"})
+            return names, json.loads(text(result)), text(before)
+
+    names, proposal, before = asyncio.run(propose())
+    assert len(names) == 18 and "propose_decision" in names
+    assert proposal["reviewed"] is False and proposal["status"] == "proposed"
+    assert json.loads(before)["current_id"] == "DEC-0002"
+    new_id = proposal["id"]
+
+    accept = subprocess.run(  # the human step, a separate process, as on the command line
+        [*SERVE[:3], "review", "accept", new_id, "--as", "Vania", "--yes"],
+        env=env_for(world.data), capture_output=True, text=True, timeout=60, check=False,
+    )  # fmt: skip
+    assert accept.returncode == 0, accept.stderr
+
+    async def after() -> str:
+        params = StdioServerParameters(command=SERVE[0], args=SERVE[1:], env=env_for(world.data))
+        async with Client(params) as client:  # read-only server this time
+            return text(await client.call_tool("get_decision_history", {"record_id": "DEC-0001"}))
+
+    chain = json.loads(asyncio.run(after()))
+    assert chain["current_id"] == new_id and [e["id"] for e in chain["chain"]][-1] == new_id
+    audit = "".join(p.read_text("utf-8") for p in (world.data / "audit").glob("*.jsonl"))
+    assert "propose_decision" in audit and "accept_record" in audit

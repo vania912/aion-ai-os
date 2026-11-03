@@ -21,7 +21,7 @@ claude mcp add --env AIOS_DATA_DIR=C:\path\to\aios-data --transport stdio aios -
 4. In Claude Code, `/mcp` should show `aios` connected. Tools appear as `mcp__aios__<tool>`,
    prompts as `/mcp__aios__analyze_project <project>`, resources under `@` as
    `aios:project://<id>/...`.
-5. Permissions: all 14 tools are read-only. Claude Code permission rules name MCP tools
+5. Permissions: the 14 default tools are read-only (18 with `--allow-propose`, see below). Claude Code permission rules name MCP tools
    `mcp__<server>__<tool>`, and a rule `mcp__aios` covers every tool of the server (per the Claude
    Code permission docs). The exact settings-file layout should be taken from the current docs.
 6. Troubleshooting: the server logs JSON to stderr only (stdout is the protocol). If it does not
@@ -61,13 +61,33 @@ search and in the snapshot's "Awaiting review (UNVERIFIED...)" section only, nev
 decisions, open tasks or constraints; the server instructions tell the model to treat them as
 unverified proposals. A human accepts or rejects them with `aios review ...` (see MEMORY.md).
 
-## Write access (not yet available)
+## Write access: propose tools (Phase 2c, opt-in)
 
-`aios serve --allow-propose` exists but currently changes nothing a client can see: it enables the
-PROPOSE permission level in the policy (default is read-only), records `allow_propose` in the
-`server_start` audit event, and leaves the tool list at 14. The propose tools themselves arrive in
-Phase 2c ([PHASE2-PLAN.md](PHASE2-PLAN.md)). Registering the server without the flag keeps it
-read-only.
+Off by default. `aios serve --allow-propose` (add it to the `claude mcp add ... -- python -m aios
+serve --allow-propose` command) enables the PROPOSE permission level and registers four more tools
+(18 in total). Without the flag those tools do not exist for the client and the policy denies the
+operations anyway; the flag is recorded in the `server_start` audit event.
+
+| Tool | Effect |
+|---|---|
+| `propose_decision` | `proposed` decision; needs `why` and `evidence`; may name an active decision it would replace (nothing changes until accepted) |
+| `propose_task` | unreviewed task |
+| `propose_memory_item` | unreviewed assumption, constraint, question, discovery or note |
+| `update_task_status` | moves a task along the allowed transitions (audited) |
+
+What they cannot do: accept or reject (human CLI only, no tool exists), choose the id, date, origin or
+review state, edit existing reasoning, or touch a project repository. Everything a caller sends is
+validated by the same writer the CLI uses and stored as text.
+
+Each proposal result carries the new id, `reviewed:false`, a reminder that it is unverified, the
+`aios review accept <id>` step for the human, and up to three similar existing records
+(`similar_existing`, matched on the title). Limits: per-project quota of unreviewed records (default
+20), body 8000 characters, an exact repeat of an unreviewed proposal (same project, type and title) is
+refused. Audit events for writes record ids, types and sizes, never titles or bodies.
+
+Claude Code prompts: whether each proposal asks for permission is your choice (decision D4). With an
+`allow` rule such as `mcp__aios__propose_task`, proposals are silent and you review them later with
+`aios review list`.
 
 ## Keeping the review step human-only (D2)
 

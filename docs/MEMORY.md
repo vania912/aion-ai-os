@@ -4,10 +4,10 @@ Code: `src/aios/domain/memory.py`, `src/aios/adapters/memory_files.py`,
 `src/aios/adapters/memory_index.py`, `src/aios/services/memory.py`.
 Design background: ARCHITECTURE.md section D and ADR-0003.
 
-**Scope today:** reading (Phase 1), human-authored writes from the CLI (Phase 2a) and the **review
-workflow** for records that Claude will propose (Phase 2b). **Claude cannot write memory yet**: the
-MCP server is still read-only and the propose tools arrive in Phase 2c. `accepted_digest` is
-written on acceptance but not yet verified (2d). Decisions are in
+**Scope today:** reading (Phase 1), human-authored writes from the CLI (Phase 2a), the **review
+workflow** (Phase 2b) and, **only when the server is started with `--allow-propose`**, MCP tools
+through which Claude proposes unreviewed records (Phase 2c). By default the MCP server is
+read-only. `accepted_digest` is written on acceptance but not yet verified (2d). Decisions are in
 [ADR-0009](adr/0009-phase2-write-model.md); the plan is in [PHASE2-PLAN.md](PHASE2-PLAN.md).
 
 ## Where records live

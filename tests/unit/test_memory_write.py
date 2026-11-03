@@ -212,17 +212,34 @@ def test_the_body_cap_applies_to_claude_only(data: Path) -> None:
 
 def test_the_unreviewed_quota_is_per_project_and_ignores_humans(data: Path) -> None:
     writer = MemoryWriter(data, config=WriteConfig(max_unreviewed_per_project=3), today=TODAY)
-    for _ in range(3):
-        writer.create(nr(type="note", why=[]), origin="claude")
+    for n in range(3):
+        writer.create(nr(type="note", why=[], title=f"Note {n}"), origin="claude")
     with pytest.raises(InvalidRequestError, match="awaiting review"):
-        writer.create(nr(type="task", why=[]), origin="claude")
-    assert (
-        writer.create(nr(type="note", why=[], project="blueprint"), origin="claude").record.project
-        == "blueprint"
-    )
-    assert writer.create(nr(type="note", why=[])).record.reviewed is True  # humans are not limited
+        writer.create(nr(type="task", why=[], title="Task"), origin="claude")
+    other = nr(type="note", why=[], project="blueprint", title="Note 0")
+    assert writer.create(other, origin="claude").record.project == "blueprint"
+    assert writer.create(nr(type="note", why=[], title="Human")).record.reviewed is True
     memory_writer.edit_front_matter(data / "projects/pulse/notes/NOTE-0001.md", {"reviewed": True})
-    assert writer.create(nr(type="task", why=[]), origin="claude").record.id == "TSK-0001"
+    assert (
+        writer.create(nr(type="task", why=[], title="Task"), origin="claude").record.id
+        == "TSK-0001"
+    )
+
+
+def test_claude_cannot_propose_the_same_thing_twice_while_it_awaits_review(data: Path) -> None:
+    writer = MemoryWriter(data, today=TODAY)
+    first = writer.create(nr(type="note", why=[], title="Cache  Keys"), origin="claude").record
+    with pytest.raises(InvalidRequestError, match=f"{first.id} already proposes"):
+        writer.create(nr(type="note", why=[], title="cache keys"), origin="claude")
+    # a different type, a different project, or a human record with that title is not a repeat
+    writer.create(nr(type="task", why=[], title="cache keys"), origin="claude")
+    writer.create(nr(type="note", why=[], title="cache keys", project="blueprint"), origin="claude")
+    writer.create(nr(type="note", why=[], title="cache keys"), origin="human")
+    # once reviewed, it no longer blocks
+    memory_writer.edit_front_matter(
+        data / f"projects/pulse/notes/{first.id}.md", {"reviewed": True}
+    )
+    writer.create(nr(type="note", why=[], title="cache keys"), origin="claude")
 
 
 # -- superseding --------------------------------------------------------------------------
