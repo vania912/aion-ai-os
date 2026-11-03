@@ -215,7 +215,7 @@ def test_propose_review_accept_history_over_stdio(world: World) -> None:
 
 
 def test_plan_propose_approve_report_verify_over_stdio(world: World) -> None:
-    """Claude proposes and reports over stdio (with the flag); only a person approves or verifies."""
+    """Claude proposes and reports over stdio; only a person approves or verifies."""
     plan_args = {
         "project": "pulse", "title": "Cache lookups", "request": "faster", "why": "slow",
         "what_will_change": "add a cache", "risks": ["stale"], "expected_result": "faster",
