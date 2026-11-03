@@ -163,7 +163,8 @@ def test_rebuild_succeeds_when_another_handle_closes_shortly(
     """On Windows an open handle blocks the atomic replace; the retry loop must outlast it."""
     svc.rebuild_index()
     index = data / ".index" / "aios.sqlite"
-    holder = sqlite3.connect(index)
+    # check_same_thread=False: the timer thread must be allowed to close this connection.
+    holder = sqlite3.connect(index, check_same_thread=False)
     holder.execute("SELECT count(*) FROM records").fetchone()  # genuinely opens the file
     timer = threading.Timer(0.25, holder.close)
     timer.start()

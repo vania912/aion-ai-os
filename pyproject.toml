@@ -46,3 +46,5 @@ plugins = ["pydantic.mypy"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+# An exception swallowed inside a helper thread must fail the test, not hide as a warning.
+filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
