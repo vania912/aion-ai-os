@@ -97,3 +97,40 @@ def test_files_commands_report_policy_errors(
     assert escape.exit_code == 2 and "path_escape" in escape.output
     unknown = runner.invoke(app, ["files", "list", "nope", *base])
     assert unknown.exit_code == 2 and "unknown project" in unknown.output
+
+
+def test_git_commands(tmp_path: Path) -> None:
+    from tests.git_helpers import make_history
+
+    history = make_history(tmp_path)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _registry(data_dir, f"projects:\n  pulse:\n    path: '{history.repo.as_posix()}'\n")
+    base = ["--data-dir", str(data_dir)]
+
+    recent = runner.invoke(app, ["git", "recent", "pulse", "--limit", "5", *base])
+    assert recent.exit_code == 0 and "only secret" in recent.output
+    assert "withheld by policy" in recent.output and ".env" not in recent.output
+
+    show = runner.invoke(app, ["git", "show", "pulse", history.c2, *base])
+    assert show.exit_code == 0 and "app_marker v2" in show.output
+    assert "hunter2" not in show.output and ".env" not in show.output
+
+    diff = runner.invoke(app, ["git", "diff", "pulse", history.c1, history.c3, *base])
+    assert diff.exit_code == 0 and "hello workspace" in diff.output
+
+    found = runner.invoke(app, ["git", "search", "pulse", "hunter2", "--mode", "content", *base])
+    assert found.exit_code == 0 and found.output.strip() == ""
+
+    status = runner.invoke(app, ["git", "status", "pulse", *base])
+    assert (
+        status.exit_code == 0 and "branch: main" in status.output and "clean: True" in status.output
+    )
+
+    branches = runner.invoke(app, ["git", "branches", "pulse", *base])
+    assert branches.exit_code == 0 and "* main" in branches.output
+
+    bad = runner.invoke(app, ["git", "show", "pulse", "HEAD:.env", *base])
+    assert bad.exit_code == 2 and "ref must be" in bad.output
+    denied = runner.invoke(app, ["git", "recent", "pulse", "--path", ".env", *base])
+    assert denied.exit_code == 2 and "denied_name" in denied.output

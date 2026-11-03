@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 
 from aios import __version__
 from aios.config import resolve_settings
+from aios.domain.git import ChangedFile
 from aios.domain.models import Registry, Severity
 from aios.errors import AiosError
 from aios.services.files import FileService, build_file_service
+from aios.services.git import GitService, build_git_service
 from aios.services.registry import check_registry, load_registry
 
 app = typer.Typer(
@@ -24,6 +28,8 @@ project_app = typer.Typer(help="Registered projects.", no_args_is_help=True)
 app.add_typer(project_app, name="project")
 files_app = typer.Typer(help="List, read and search project files.", no_args_is_help=True)
 app.add_typer(files_app, name="files")
+git_app = typer.Typer(help="Read-only git history, diffs and status.", no_args_is_help=True)
+app.add_typer(git_app, name="git")
 
 DataDirOption = Annotated[
     Path | None,
@@ -151,3 +157,142 @@ def files_search(
         f"{' truncated' if result.truncated else ''}]",
         err=True,
     )
+
+
+@contextmanager
+def _cli_errors() -> Iterator[None]:
+    """Turn expected errors into a message on stderr and exit code 2."""
+    try:
+        yield
+    except AiosError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+
+def _git(data_dir: Path | None, project: str) -> GitService:
+    with _cli_errors():
+        return build_git_service(_load(data_dir), project)
+
+
+def _echo_files(files: list[ChangedFile], hidden: int) -> None:
+    for file in files:
+        typer.echo(f"    {file.status} {file.path}")
+    if hidden:
+        typer.echo(f"    (+{hidden} file(s) withheld by policy)")
+
+
+@git_app.command("recent")
+def git_recent(
+    project: str,
+    since: str | None = None,
+    limit: int = 20,
+    path: str | None = None,
+    data_dir: DataDirOption = None,
+) -> None:
+    """Recent commits with the (policy-visible) files each changed."""
+    service = _git(data_dir, project)
+    with _cli_errors():
+        result = service.get_recent_changes(since, limit, path)
+    for c in result.commits:
+        typer.echo(f"{c.short_hash} {c.date[:10]} {c.author}: {c.subject}")
+        _echo_files(c.files, c.hidden_files)
+    if result.truncated:
+        typer.echo("[truncated]", err=True)
+
+
+@git_app.command("show")
+def git_show(project: str, ref: str, data_dir: DataDirOption = None) -> None:
+    """Show one commit: message, visible files and patch."""
+    service = _git(data_dir, project)
+    with _cli_errors():
+        d = service.get_commit(ref)
+    typer.echo(f"{d.hash}\n{d.author}  {d.date}\n\n    {d.subject}")
+    if d.body:
+        typer.echo("\n" + d.body)
+    typer.echo("")
+    _echo_files(d.files, d.hidden_files)
+    if d.diff:
+        typer.echo("\n" + d.diff)
+    notes = [
+        n
+        for n, on in (("diff truncated", d.diff_truncated), ("body truncated", d.body_truncated))
+        if on
+    ]
+    if d.files_omitted:
+        notes.append(f"{d.files_omitted} file(s) omitted from the diff")
+    if notes:
+        typer.echo("[" + "; ".join(notes) + "]", err=True)
+
+
+@git_app.command("diff")
+def git_diff(
+    project: str,
+    base: str,
+    head: Annotated[str, typer.Argument(help="Defaults to HEAD.")] = "HEAD",
+    path: str | None = None,
+    data_dir: DataDirOption = None,
+) -> None:
+    """Diff between two commits (policy-visible files only)."""
+    service = _git(data_dir, project)
+    with _cli_errors():
+        r = service.get_diff(base, head, path)
+    _echo_files(r.files, r.hidden_files)
+    if r.diff:
+        typer.echo("\n" + r.diff)
+    if r.diff_truncated or r.files_omitted:
+        typer.echo(f"[truncated; {r.files_omitted} file(s) omitted]", err=True)
+
+
+@git_app.command("search")
+def git_search(
+    project: str,
+    query: str,
+    mode: Literal["message", "content", "path"] = "message",
+    since: str | None = None,
+    limit: int = 20,
+    data_dir: DataDirOption = None,
+) -> None:
+    """Find commits by message, changed content (pickaxe) or path."""
+    service = _git(data_dir, project)
+    with _cli_errors():
+        hits = service.search_history(query, mode, since=since, limit=limit)
+    for c in hits.commits:
+        typer.echo(f"{c.short_hash} {c.date[:10]} {c.author}: {c.subject}")
+    if hits.truncated:
+        typer.echo("[truncated]", err=True)
+
+
+@git_app.command("status")
+def git_status(project: str, data_dir: DataDirOption = None) -> None:
+    """Branch, upstream and working-tree summary."""
+    service = _git(data_dir, project)
+    with _cli_errors():
+        s = service.get_branch_status()
+    where = "(detached)" if s.detached else (s.branch or "(none)")
+    typer.echo(f"branch: {where}  head: {(s.head or '(no commits)')[:10]}")
+    if s.upstream:
+        typer.echo(f"upstream: {s.upstream}  ahead {s.ahead}  behind {s.behind}")
+    typer.echo(
+        f"staged {s.staged}  unstaged {s.unstaged}  untracked {s.untracked}  "
+        f"conflicted {s.conflicted}  clean: {s.clean}"
+    )
+    for e in s.entries:
+        typer.echo(f"  {e.index}{e.worktree} {e.path}")
+    for u in s.untracked_paths:
+        typer.echo(f"  ?? {u}")
+    if s.hidden_files:
+        typer.echo(f"  (+{s.hidden_files} path(s) withheld by policy)")
+
+
+@git_app.command("branches")
+def git_branches(
+    project: str, remotes: bool = False, limit: int = 50, data_dir: DataDirOption = None
+) -> None:
+    """List branches (current one marked with *)."""
+    service = _git(data_dir, project)
+    with _cli_errors():
+        result = service.list_branches(remotes=remotes, limit=limit)
+    for b in result.branches:
+        typer.echo(f"{'*' if b.current else ' '} {b.name}  {b.hash[:10]}")
+    if result.truncated:
+        typer.echo("[truncated]", err=True)

@@ -199,6 +199,32 @@ class PathGuard:
             return False
         return True
 
+    def vet_repo_path(self, relative_path: str, *, is_dir: bool = False) -> str:
+        """Lexically vet a path *inside the repository* (history, diffs, status).
+
+        Touches no files, so it works for deleted paths. Returns the normalised POSIX path or
+        raises ``PolicyViolation``. Files must also have an allowed extension or file name.
+        """
+        parts = self._split(relative_path)
+        if not parts:
+            raise PolicyViolation("invalid_path", "empty path")
+        for part in parts:
+            self._check_syntax(part, relative_path)
+        self._check_denied(parts, relative_path)
+        if not is_dir and not self._extension_allowed(parts[-1]):
+            raise PolicyViolation(
+                "extension_not_allowed", f"file type is not allowed: {relative_path!r}"
+            )
+        return "/".join(parts)
+
+    def is_repo_path_visible(self, relative_path: str, *, is_dir: bool = False) -> bool:
+        """Non-raising form of :meth:`vet_repo_path`, for filtering git output."""
+        try:
+            self.vet_repo_path(relative_path, is_dir=is_dir)
+        except PolicyViolation:
+            return False
+        return True
+
     def to_relative(self, path: Path) -> str:
         """POSIX-style project-relative form of an absolute path under the root."""
         return path.resolve(strict=False).relative_to(self._root).as_posix()

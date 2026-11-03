@@ -38,3 +38,7 @@ class InvalidRequestError(AiosError):
 
 class SearchError(AiosError):
     """The search backend failed or timed out."""
+
+
+class GitError(AiosError):
+    """A git operation failed, timed out, or was refused by the runner's allowlist."""
