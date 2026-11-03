@@ -123,6 +123,7 @@ before it reaches FTS5.
   and multiple successors), every integrity check, and the CLI.
 - Manual mutation checks: 17 deliberate breakages (including FTS operators from user text,
   skipped freshness checks, ignored project filters, symlink following, unsafe YAML, alias
-  expansion, a leftover temp file after a failed rebuild) each make the suite fail. **Three
-  initially survived** because my tests were too weak (symlink and unsafe-YAML tests could not
-  tell the difference; the first alias-bomb check did not exist). They were rewritten.
+  expansion, a leftover temp file after a failed rebuild) each make the suite fail. **Two
+  initially survived** (symlink following, unsafe YAML) because my tests could not tell the
+  difference; they were rewritten. The alias-bomb gap was found separately, by probing a small
+  YAML file, and the guard and its test were added afterwards.
