@@ -50,3 +50,7 @@ class MemoryStoreError(AiosError):
 
 class UnknownRecordError(AiosError):
     """A memory record id does not exist."""
+
+
+class AuditError(AiosError):
+    """The audit log could not be written or read safely."""

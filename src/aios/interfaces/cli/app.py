@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Literal
@@ -12,10 +12,12 @@ import typer
 
 from aios import __version__
 from aios.config import Settings, resolve_settings
+from aios.domain.audit import AuditEvent
 from aios.domain.git import ChangedFile
 from aios.domain.memory import MemoryHit
-from aios.domain.models import Registry, Severity
+from aios.domain.models import Issue, Registry, Severity
 from aios.errors import AiosError
+from aios.services.audit import AuditLog, audit_dir_exists
 from aios.services.files import FileService, build_file_service
 from aios.services.git import GitService, build_git_service
 from aios.services.memory import MemoryService, memory_dir_exists
@@ -39,6 +41,8 @@ memory_app = typer.Typer(help="Search and read memory records.", no_args_is_help
 app.add_typer(memory_app, name="memory")
 decision_app = typer.Typer(help="Decision records and their history.", no_args_is_help=True)
 app.add_typer(decision_app, name="decision")
+audit_app = typer.Typer(help="The audit log of operations.", no_args_is_help=True)
+app.add_typer(audit_app, name="audit")
 
 DataDirOption = Annotated[
     Path | None,
@@ -102,6 +106,11 @@ def doctor(data_dir: DataDirOption = None) -> None:
     issues = check_registry(registry)
     if memory_dir_exists(settings.data_dir):
         issues += MemoryService(settings.data_dir, registry=registry).check()
+    if audit_dir_exists(settings.data_dir):
+        audit = AuditLog(settings.data_dir, actor="cli").verify()
+        for p in audit.problems:
+            msg = f"{p.file}:{p.line} {p.code}: {p.message}"
+            issues.append(Issue("-", Severity.ERROR, "audit_chain_broken", msg))
     for issue in issues:
         typer.echo(
             f"{issue.severity.value}	{issue.project_id}	{issue.code}	{issue.message}"
@@ -487,3 +496,81 @@ def decision_history(record_id: str, data_dir: DataDirOption = None) -> None:
     typer.echo(f"current: {result.current_id}")
     for note in result.notes:
         typer.echo(f"warning: {note}", err=True)
+
+
+def _audit(data_dir: Path | None) -> AuditLog:
+    return AuditLog(_settings(data_dir).data_dir, actor="cli")
+
+
+def _fmt_args(values: Mapping[str, object]) -> str:
+    return " ".join(f"{k}={str(v)[:60]!r}" for k, v in values.items())
+
+
+def _echo_event(e: AuditEvent) -> None:
+    state = e.verdict if e.event == "request" else (e.outcome or "")
+    typer.echo(
+        f"{e.seq}\t{e.ts}\t{e.call_id[:8]}\t{e.event}\t{e.op}\t{e.project or '-'}"
+        f"\t{state}\t{e.code or ''}\t{_fmt_args(e.args)}"
+    )
+
+
+@audit_app.command("list")
+def audit_list(
+    limit: int = 50,
+    op: str | None = None,
+    project: str | None = None,
+    outcome: str | None = None,
+    call_id: str | None = None,
+    since: str | None = None,
+    data_dir: DataDirOption = None,
+) -> None:
+    """List audit events, newest first."""
+    audit = _audit(data_dir)
+    with _cli_errors():
+        events = audit.list_events(
+            limit=limit, op=op, project=project, outcome=outcome, call_id=call_id, since=since
+        )
+    for e in events:
+        _echo_event(e)
+    if not events:
+        typer.echo("no matching events", err=True)
+
+
+@audit_app.command("show")
+def audit_show(call_id: str, data_dir: DataDirOption = None) -> None:
+    """Show every event of one call (request and result), oldest first."""
+    audit = _audit(data_dir)
+    with _cli_errors():
+        events = audit.get_call(call_id)
+    if not events:
+        typer.echo(f"error: no events for call {call_id}", err=True)
+        raise typer.Exit(code=2)
+    for e in events:
+        typer.echo(f"--- {e.event} #{e.seq} {e.ts}")
+        for key, value in e.model_dump(exclude={"event", "seq", "ts"}).items():
+            if value not in (None, {}, ""):
+                typer.echo(f"{key}: {value}")
+
+
+@audit_app.command("verify")
+def audit_verify(data_dir: DataDirOption = None) -> None:
+    """Check the hash chain. Exit code 1 if anything is wrong."""
+    audit = _audit(data_dir)
+    with _cli_errors():
+        result = audit.verify()
+    for p in result.problems:
+        typer.echo(f"{p.file}:{p.line}\t{p.code}\t{p.message}")
+    if result.more_problems:
+        typer.echo("(more problems not shown)")
+    if not result.ok:
+        raise typer.Exit(code=1)
+    typer.echo(f"ok: {result.events} event(s), last seq {result.last_seq}")
+
+
+@audit_app.command("anchor")
+def audit_anchor(data_dir: DataDirOption = None) -> None:
+    """Print the newest sequence number and hash (record it where writers cannot edit)."""
+    audit = _audit(data_dir)
+    with _cli_errors():
+        seq, digest = audit.anchor()
+    typer.echo(f"seq: {seq}\nhash: {digest or '(empty log)'}")
