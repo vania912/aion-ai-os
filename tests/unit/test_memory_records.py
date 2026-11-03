@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -142,3 +143,19 @@ def test_yaml_is_parsed_safely(tmp_path: Path) -> None:
     with pytest.raises(RecordParseError):
         parse_record(evil)
     assert not marker.exists(), "YAML constructors must not execute code"
+
+
+def test_yaml_alias_bombs_are_rejected_quickly() -> None:
+    levels = ["a0: &a0 [x, x, x, x, x, x, x, x, x]"]
+    for i in range(1, 12):  # 9**12 elements if expanded
+        levels.append(f"a{i}: &a{i} [" + ",".join([f"*a{i - 1}"] * 9) + "]")
+    bomb = "\n".join(levels) + "\nwhy: *a11"
+    text = GOOD.replace("---\nBody", bomb + "\n---\nBody", 1)
+    start = time.monotonic()
+    with pytest.raises(RecordParseError, match="aliases are not allowed"):
+        parse_record(text)
+    assert time.monotonic() - start < 2
+
+
+def test_plain_anchors_free_yaml_still_works() -> None:
+    assert parse_record(GOOD.replace("title: T", "title: 'a & b * c'")).title == "a & b * c"

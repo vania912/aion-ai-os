@@ -31,6 +31,20 @@ class RecordParseError(ValueError):
     """The file is not a valid memory record (message is user-facing)."""
 
 
+class _NoAliasLoader(yaml.SafeLoader):
+    """SafeLoader that rejects YAML anchors/aliases.
+
+    Records have no use for them, and a tiny file of nested aliases can expand to gigabytes
+    when something later walks the structure (the "billion laughs" pattern).
+    """
+
+    def compose_node(self, parent: yaml.Node | None, index: int) -> yaml.Node | None:
+        if self.check_event(yaml.AliasEvent):
+            event = self.peek_event()  # type: ignore[no-untyped-call]
+            raise yaml.YAMLError(f"YAML aliases are not allowed (line {event.start_mark.line + 1})")
+        return super().compose_node(parent, index)
+
+
 @dataclass(frozen=True)
 class ScanResult:
     records: list[LoadedRecord]
@@ -45,7 +59,7 @@ def parse_record(text: str) -> MemoryRecord:
     if not match:
         raise RecordParseError("missing YAML front matter (file must start with '---')")
     try:
-        front = yaml.safe_load(match.group(1))
+        front = yaml.load(match.group(1), Loader=_NoAliasLoader)
     except yaml.YAMLError as exc:
         raise RecordParseError(f"invalid YAML front matter: {exc}") from exc
     if not isinstance(front, dict) or not all(isinstance(k, str) for k in front):
