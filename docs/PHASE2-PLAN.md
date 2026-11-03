@@ -1,6 +1,6 @@
 # Phase 2 plan — persistent memory (writes)
 
-Status: **D1–D4 decided by the user, D5–D7 assumed (see ADR-0009). Steps 2a, 2b and 2c are implemented; 2d not started.**
+Status: **D1–D4 decided by the user, D5–D7 assumed (see ADR-0009). Steps 2a to 2d are implemented.**
 Date: 2026-11-03. No Phase 2 code exists.
 Legend: **[V]** verified against a source named in the text · **[U]** unverified or remembered ·
 **[J]** my judgement.
@@ -267,3 +267,29 @@ Verification:
 Not done / not verified: Windows run of the Claude Code session (CI covers the code, not the
 client); the `propose_decision` supersession path with a real model (covered in-process and over
 stdio only); the permission-prompt (D4 `ask`) flow.
+
+## 14. Step 2d result (2026-11-03)
+
+Done: `projects/<project>/state.yaml` (hand-maintained; strict schema; read safely; shown in the
+snapshot, quoted and labelled unverified; `aios project state <project>`); `accepted_digest`
+verification and stale reports in `aios doctor` (`accepted_digest_mismatch`, `stale_proposal`,
+`stale_state`, `state_undated`, `invalid_state`); `decision_digest` moved to the domain module.
+
+Verification: 878 tests pass locally (1 POSIX-only skipped); ruff and mypy strict clean. New tests in
+`tests/unit/test_state_and_staleness.py`. 12 mutation checks (digest never compared, no stale
+proposals, stale applied to reviewed records, no stale state, project dirs not scanned, no project-id
+check, symlinks followed, aliases allowed, no size cap, unknown keys allowed, state text not quoted,
+unverified label dropped) each failed a test. The exit criterion was also run with the real CLI:
+accept a Claude proposal, hand-edit its body, `aios doctor` prints `accepted_digest_mismatch`.
+
+Defect found by the tests: `doctor` only checked state files of projects that already had records or
+a registry entry, so a broken state file in an otherwise empty project went unreported. Fixed by also
+scanning the project directories.
+
+Differences from the plan:
+- "Proposals over quota" is covered by the existing `review_backlog` warning (same threshold, 20);
+  there is no separate check.
+- Staleness limits are `MemoryConfig` fields, not CLI options.
+- The digest check cannot see an edit that also rewrites `accepted_digest` (see MEMORY.md).
+- Not tested: Windows behaviour of the symlink refusal (that test is skipped on Windows; CI covers
+  the rest).

@@ -7,7 +7,7 @@ Design background: ARCHITECTURE.md section D and ADR-0003.
 **Scope today:** reading (Phase 1), human-authored writes from the CLI (Phase 2a), the **review
 workflow** (Phase 2b) and, **only when the server is started with `--allow-propose`**, MCP tools
 through which Claude proposes unreviewed records (Phase 2c). By default the MCP server is
-read-only. `accepted_digest` is written on acceptance but not yet verified (2d). Decisions are in
+read-only. Phase 2d adds the project state file, `accepted_digest` verification and stale reports. Decisions are in
 [ADR-0009](adr/0009-phase2-write-model.md); the plan is in [PHASE2-PLAN.md](PHASE2-PLAN.md).
 
 ## Where records live
@@ -155,6 +155,34 @@ aios memory list|search --unreviewed | --reviewed
 - The search index schema is now version 2 (`origin`, `reviewed` columns). An index from before
   rebuilds itself on the next query.
 
+## Project state file and staleness (Phase 2d)
+
+`projects/<project>/state.yaml` is a small file that *you* maintain for what git and code cannot
+tell: a summary, the architecture in a few sentences, known constraints. Nothing in aios writes it.
+
+```yaml
+summary: Monitoring service for the regional Slack workspaces.    # max 1500 characters
+architecture: One collector per region, a shared alert router.    # max 3000 characters
+known_constraints:                                                 # max 20, one line each
+  - No customer data leaves the region
+updated: 2026-10-20        # the day you last confirmed this is still true
+updated_by: Vania
+```
+
+- Unknown keys, control characters, YAML aliases, symlinks, files over 64 KiB and non-UTF-8 are
+  refused with a reason (`aios project state <project>` shows the parsed file or the reason).
+- It appears in the project snapshot (`get_project_context`, `project://<id>/context`) under
+  "Project state (hand-maintained file, updated ..., N days ago; aios does not verify it)". Every
+  line is shown quoted (`> `) so file text cannot start a heading or list entry of its own. A broken
+  file is listed under "Unavailable" and the rest of the snapshot is still returned.
+- Because it is a plain file, anything that can edit the data directory can change it (including a
+  Claude Code session with file-edit access). The snapshot label says so; keep the data directory
+  out of Claude's edit scope (see MCP.md, "Keeping the review step human-only").
+- `aios doctor` reports: `stale_proposal` (unreviewed for more than 14 days), `stale_state` (`updated`
+  older than 90 days), `state_undated`, `invalid_state`. Both limits are `MemoryConfig` fields; the
+  CLI does not expose them yet. A hand-written decision is not "stale" by age: only unreviewed
+  records and the state file are.
+
 ## Decision lifecycle
 
 `DEC-0001 (superseded) <-- supersedes -- DEC-0002 (active)`. Nothing is deleted. The reader
@@ -168,7 +196,8 @@ reasons and the `reason_for_change` of each replacement, and the current decisio
 `supersession_cycle`, `dangling_reference` (warning), `unknown_project` (warning, needs the registry),
 `unreviewed_active` (an unreviewed decision marked active), `reviewed_without_acceptance` (warning),
 `review_backlog` (warning at 20 unreviewed), `rejection_pending_move` (a rejection was recorded but the
-file was not archived yet), plus file problems: `invalid_record`,
+file was not archived yet), `accepted_digest_mismatch` (warning), `stale_proposal` (warning),
+`invalid_state` (error), `stale_state` and `state_undated` (warnings), plus file problems: `invalid_record`,
 `location_mismatch`, `duplicate_id`, `file_too_large`, `unexpected_file` (warning),
 `bad_project_dir`. One bad file is skipped and reported; it never stops the index or the other
 records.
@@ -205,8 +234,13 @@ before it reaches FTS5.
 
 - **Change detection is by path, size and mtime.** An edit that keeps both size and mtime
   identical is not noticed until `aios index rebuild`.
-- **Hand edits are not blocked.** The writer never edits reasoning, but nothing stops you editing a
-  file by hand; detecting that (via `accepted_digest`) is planned for 2d.
+- **Hand edits are not blocked, only detected, and only for accepted decisions.** The writer never
+  edits reasoning, but nothing stops a hand edit. `aios doctor` compares an accepted decision's
+  `accepted_digest` (a SHA-256 over title, reasons, alternatives, body and `supersedes`) with the
+  file and warns on a difference. Consequences: it runs when you run doctor, not continuously; an
+  edit that also rewrites `accepted_digest` is not detected by this check (the data repo's git
+  history is the record there); records of other types, and decisions without a digest (hand-written
+  ones), are not covered; `evidence`, tags and links are outside the digest.
 - **Keyword search only**; no synonyms, no embeddings.
 - **YAML aliases are rejected** (a tiny file of nested aliases can expand enormously when walked);
   a 256 KiB file-size cap applies to every record.

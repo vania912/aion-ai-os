@@ -1,0 +1,7 @@
+# Hand-maintained project state (see docs/MEMORY.md). Nothing in aios writes this file.
+summary: Example project used by the aios documentation and tests.
+architecture: A small library with a command-line front end.
+known_constraints:
+  - No network access at runtime
+updated: 2026-10-20
+updated_by: Example Author

@@ -10,7 +10,7 @@ history and memory, backed by a policy engine and a hash-chained audit log, plus
 Phase 2a adds human-authored memory writes from the CLI (decisions with supersession, tasks,
 notes); Phase 2b adds the review workflow (`aios review ...`); Phase 2c adds four MCP tools that let
 Claude *propose* memory records and change task status, only when the server is started with
-`--allow-propose` (off by default). Proposals are unreviewed until you accept them. It awaits your
+`--allow-propose` (off by default). Proposals are unreviewed until you accept them. Phase 2d adds a hand-maintained project state file shown in the snapshot, and `aios doctor` checks for hand-edited accepted decisions and stale proposals. It awaits your
 review and a check on your Windows machine.
 Nothing can modify a project yet (Phases 3-4 are not started).
 
