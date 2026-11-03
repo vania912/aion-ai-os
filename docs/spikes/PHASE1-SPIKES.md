@@ -44,3 +44,40 @@ Still open: S7/S8 (interactive prompt and resource behaviour), S9 (Claude Code s
 ## Consequences for the design
 - No change to the architecture so far. FTS5 and ripgrep remain assumptions for Windows until step 1 is done.
 - The stdout rule is now backed by a measurement: Phase 1 must lint for `print(` and route logging to stderr.
+
+## Interactive Claude Code results (user's Windows machine, 2026-11-03)
+
+| # | Result |
+|---|---|
+| S7 prompts | `/aios-spike:analyze_project (MCP)` appeared and ran. It failed only because the required `project` argument was not supplied; Claude Code reported the usage as `/mcp__aios-spike__analyze_project project`. **Design consequence:** prompt arguments are positional and required ones must be typed, so keep prompts to one simple argument and consider making it optional |
+| S8 resources | `@` listed `aios-spike:project://demo` and a second `aios-spike` entry whose description reads "Templated decisions…" (name truncated on screen). **Inferred**, not confirmed, to be the `project://{name}/decisions` template |
+| S9 TTY | Per the user's Claude Code session, both its PowerShell and Bash tools printed **`True`** for `sys.stdin.isatty()`. That session noted that on Windows `isatty()` may be `True` for the NUL device (stated from model memory, **unverified**). `spikes/tty_check.py` was written to tell a real console from NUL; **its output on the user's machine is still needed** |
+| Permission mode | The user's tool calls were labelled "Allowed by auto mode" |
+
+**Consequence for ADR-0008:** the revisit trigger "Claude Code's shell has a TTY" has fired, so the
+TTY-check layer of the approval design cannot be relied on as written. No approval code exists yet.
+
+## Claude Code permission behaviour (documentation check, 2026-11-03)
+
+Source: a documentation read by a sub-agent of code.claude.com pages (permissions, permission
+modes, hooks, settings, tools reference). Some sections were truncated in its reads; "not found"
+means "not seen". Quotes are as reported by that agent.
+
+- Explicit **`ask` rules still force a prompt in auto mode**, and `bypassPermissions` lists
+  ask-rule matches among actions no mode auto-approves. In `dontAsk` mode ask-rule matches are
+  *denied* rather than prompted. `acceptEdits`: not stated.
+- **`deny` rules block in every mode**, including `bypassPermissions`, and beat allow/ask. Matching
+  is pattern-based; a Bash deny rule does not match the same program by another path or inside
+  `sh -c`.
+- **PreToolUse hooks** can deny a call (`permissionDecision: deny` or exit code 2). The docs state
+  hook decisions don't bypass permission rules. Not found: an explicit statement that hooks run in
+  every mode, or that a hook deny outranks an auto-mode classifier approval.
+- **Managed settings** are the highest-precedence level and cannot be overridden by lower levels;
+  `.claude` is a protected directory (writes prompt in default/acceptEdits mode, go to the
+  classifier in auto mode, are denied in dontAsk, **allowed in bypassPermissions**).
+- **Shell stdin/TTY:** the docs read do not say whether the shell tools have a TTY, a null stdin, or
+  can open `/dev/tty` / `CONIN$`.
+
+Implication: relying on `ask` rules for R1/R2 prompts is supported by the docs even in auto mode,
+but the TTY property is undocumented and was observed as `True` here. The approval mechanism for
+high-risk operations needs a decision before Phase 3 (options in the project discussion).

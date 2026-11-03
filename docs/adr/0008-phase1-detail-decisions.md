@@ -17,6 +17,6 @@
 | Project size | **Unknown**; Phase 1 adds a size report to `aios project inspect` and decides from data | — | Search limits may need tuning after first real use |
 
 ## Revisit triggers
-- Approval hardening: if Claude Code on the user's machine is found to run shell commands with a TTY (spike S9 on Windows).
+- Approval hardening: if Claude Code on the user's machine is found to run shell commands with a TTY (spike S9 on Windows). **TRIGGERED 2026-11-03**: isatty() printed True in both of Claude Code's shell tools on the user's machine (may be the NUL-device quirk; `spikes/tty_check.py` pending). The TTY-check layer is under review; see docs/spikes/PHASE1-SPIKES.md.
 - Data repo: if loss of the local machine would be unacceptable, add a private remote.
 - Code search: if `aios project inspect` shows large repos or the fallback is too slow.
