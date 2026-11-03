@@ -30,3 +30,11 @@ class PolicyViolation(AiosError):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+
+
+class InvalidRequestError(AiosError):
+    """A request argument is out of range or malformed (not a policy refusal)."""
+
+
+class SearchError(AiosError):
+    """The search backend failed or timed out."""

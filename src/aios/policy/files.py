@@ -149,6 +149,10 @@ class PathGuard:
     def root(self) -> Path:
         return self._root
 
+    @property
+    def policy(self) -> FileAccessPolicy:
+        return self._policy
+
     def resolve(self, relative_path: str) -> Path:
         """Return the real absolute path for ``relative_path`` or raise ``PolicyViolation``.
 

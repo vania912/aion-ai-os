@@ -9,6 +9,9 @@ jobs:
   test:
     name: ${{ matrix.os }} / py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
+    env:
+      # On Linux ripgrep must be present so its tests cannot silently skip.
+      AIOS_REQUIRE_RG: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -19,6 +22,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Install ripgrep (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Install
         run: python -m pip install -e ".[dev]"
       - name: Lint

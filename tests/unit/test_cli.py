@@ -56,3 +56,44 @@ def test_doctor_exit_codes(tmp_path: Path, make_git_repo: Callable[[str], Path])
     bad = runner.invoke(app, ["doctor", "--data-dir", str(data_dir)])
     assert bad.exit_code == 1
     assert "path_missing" in bad.output
+
+
+def _project(tmp_path: Path, make_git_repo: Callable[[str], Path]) -> Path:
+    repo = make_git_repo("repo")
+    (repo / "app.py").write_text("print('hi')\nneedle here\n")
+    (repo / ".env").write_text("needle=1\n")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _registry(data_dir, f"projects:\n  pulse:\n    path: '{repo.as_posix()}'\n")
+    return data_dir
+
+
+def test_files_list_read_search(tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+    data_dir = _project(tmp_path, make_git_repo)
+    base = ["--data-dir", str(data_dir)]
+
+    listing = runner.invoke(app, ["files", "list", "pulse", *base])
+    assert listing.exit_code == 0 and "f\tapp.py\t" in listing.output
+    sub = runner.invoke(app, ["files", "list", "pulse", ".", *base])  # positional path
+    assert sub.exit_code == 0 and "app.py" in sub.output
+    assert ".env" not in listing.output and ".git" not in listing.output
+
+    read = runner.invoke(app, ["files", "read", "pulse", "app.py", "--start", "2", *base])
+    assert read.exit_code == 0 and "needle here" in read.output
+
+    found = runner.invoke(app, ["files", "search", "pulse", "needle", *base])
+    assert found.exit_code == 0
+    assert "app.py:2:needle here" in found.output and ".env" not in found.output
+
+
+def test_files_commands_report_policy_errors(
+    tmp_path: Path, make_git_repo: Callable[[str], Path]
+) -> None:
+    data_dir = _project(tmp_path, make_git_repo)
+    base = ["--data-dir", str(data_dir)]
+    denied = runner.invoke(app, ["files", "read", "pulse", ".env", *base])
+    assert denied.exit_code == 2 and "denied_name" in denied.output
+    escape = runner.invoke(app, ["files", "list", "pulse", "../", *base])
+    assert escape.exit_code == 2 and "path_escape" in escape.output
+    unknown = runner.invoke(app, ["files", "list", "nope", *base])
+    assert unknown.exit_code == 2 and "unknown project" in unknown.output
