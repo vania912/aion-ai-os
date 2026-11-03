@@ -69,6 +69,40 @@ PROPOSE permission level in the policy (default is read-only), records `allow_pr
 Phase 2c ([PHASE2-PLAN.md](PHASE2-PLAN.md)). Registering the server without the flag keeps it
 read-only.
 
+## Keeping the review step human-only (D2)
+
+The server cannot stop a *client's shell tool* from running `aios review accept` or from editing a
+record file directly. That boundary belongs to the client. Findings, with their evidence level:
+
+**Documented** (Claude Code permissions docs, read 2026-11-03 via a sub-agent; not re-verified here):
+`permissions.deny` rules apply in every permission mode and win over allow rules; Bash deny rules
+match by text and do not cover other program paths, `sh -c`, `env`, `npx` or shell-variable
+expansion; `.claude` is a protected path.
+
+**Tested here** (headless Claude Code on Linux, Bash tool only, one run per variant, in a scratch
+directory with throw-away records; the outcome is the model's reply plus the record's file state, so a
+refusal by the model itself cannot be told apart from a rule block):
+
+| Setup | Result |
+|---|---|
+| Narrow rules `Bash(aios review accept *)`, `Bash(aios review reject *)`, `Bash(python -m aios review *)` | plain, absolute-path and `python -m` variants blocked; `sh -c '...aios review accept...'` ran and the record was accepted |
+| Leading-wildcard rules `Bash(*aios review accept*)`, `Bash(*aios review reject*)`, `Bash(*-m aios review*)` | all four spellings blocked; all proposals stayed unreviewed |
+| Data dir inside the working directory, no rules | Edit tool flipped `reviewed: false` to `true` |
+| Same, with `Edit(./data/**)` and `Write(./data/**)` deny | Edit tool blocked; `sed -i` via Bash also blocked (reason not examined) |
+| Data dir outside the working directory, no rules | Edit tool and `sed -i` both flipped the flag |
+
+**Not tested:** the PowerShell tool and Windows path forms; wrappers other than `sh -c`; repeated runs.
+
+**What the server does regardless:** a record hand-edited to `reviewed: true` while `origin: claude`
+and without an acceptance is reported by `aios memory check` as `reviewed_without_acceptance`
+(confirmed on the flipped-flag case above). This detects the edit after the fact; it does not prevent it.
+
+**Suggested hardening (inference, not a guarantee):** keep the data repo outside any directory
+Claude Code works in, and add deny rules for the review commands (leading-wildcard form) plus
+`Edit`/`Write` on the data path, in the user or managed settings. A PreToolUse hook or sandboxing
+is the stronger option if text matching proves insufficient. Settings files are not changed by this
+repo.
+
 ## Safety design
 
 - **No write path.** There is no tool for editing files, committing, pushing, deleting or
