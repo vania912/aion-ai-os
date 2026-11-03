@@ -610,3 +610,31 @@ def test_a_review_backlog_is_reported_per_project(tmp_path: Path) -> None:
     backlog = [i for i in MemoryService(tmp_path).check() if i.code == "review_backlog"]
     assert [(i.project_id, i.severity.value) for i in backlog] == [("pulse", "warning")]
     assert "20 records" in backlog[0].message
+
+
+def test_find_similar_matches_on_any_shared_word_and_excludes_the_record_itself(
+    tmp_path: Path,
+) -> None:
+    write_record(tmp_path, id="DEC-0001", title="Plain tables for storage")
+    write_record(tmp_path, id="DEC-0002", title="Plain tables with FTS5 search")
+    write_record(tmp_path, id="DEC-0003", title="Unrelated routing decision")
+    svc = MemoryService(tmp_path)
+    found = svc.find_similar("Plain tables with FTS5 search", exclude_id="DEC-0002")
+    assert [h.id for h in found] == ["DEC-0001"]
+    assert svc.find_similar("???") == [] and svc.find_similar("", limit=3) == []
+    assert len(svc.find_similar("plain tables", limit=1)) == 1
+
+
+def test_a_pending_superseding_proposal_does_not_trigger_reciprocity_warnings(
+    tmp_path: Path,
+) -> None:
+    write_record(tmp_path, id="DEC-0001", title="Old")
+    write_record(
+        tmp_path, id="DEC-0002", title="New", status="proposed", origin="claude", reviewed=False,
+        supersedes="DEC-0001", evidence=["e"],
+    )  # fmt: skip
+    assert MemoryService(tmp_path).check() == []
+    # ...but once the successor is in force, an unfinished predecessor IS reported.
+    write_record(tmp_path, id="DEC-0002", title="New", supersedes="DEC-0001")
+    found = {i.code for i in MemoryService(tmp_path).check()}
+    assert {"not_reciprocal", "predecessor_not_superseded"} <= found

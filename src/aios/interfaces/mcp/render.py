@@ -59,3 +59,33 @@ def render_record(view: MemoryRecordView) -> str:
     if view.record.body:
         parts.append("--- body ---\n" + view.record.body)
     return "\n".join(parts)
+
+
+def _dump(data: Any) -> str:
+    return json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+
+
+def compact_hits(result: BaseModel, field: str) -> str:
+    """Search/list results for a model: no path or score, and review state shown only when it
+    is NOT the trusted default (an unreviewed record must always say so)."""
+    data: dict[str, Any] = result.model_dump(mode="json", exclude_none=True)
+    for hit in data[field]:
+        hit.pop("path", None)
+        hit.pop("score", None)
+        if hit.get("origin") == "human":
+            hit.pop("origin")
+        if hit.get("reviewed") is True:
+            hit.pop("reviewed")
+    return _dump(data)
+
+
+def compact_chain(result: BaseModel) -> str:
+    """Decision history: ``reviewed`` appears only on entries that are not reviewed."""
+    data: dict[str, Any] = result.model_dump(mode="json", exclude_none=True)
+    for entry in data["chain"]:
+        if entry.get("reviewed") is True:
+            entry.pop("reviewed")
+        for key in ("made_by", "why"):
+            if entry.get(key) == []:
+                entry.pop(key)
+    return _dump(data)

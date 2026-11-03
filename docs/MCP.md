@@ -41,7 +41,7 @@ MCP separates what the model decides to call (**tools**), what the application o
 | `get_project_context` | state snapshot: git, recent commits, decisions, tasks, questions, constraints | sections that fail are listed |
 | `list_project_files` / `read_project_file` / `search_project` | files | policy deny-list, text types only, 1 MiB per file, ~40k characters per read, regex needs ripgrep |
 | `get_recent_changes` / `get_commit` / `get_diff` / `search_git_history` / `get_branch_status` | git | visible files only; hidden ones counted, never named |
-| `search_memory` / `list_memory` / `get_memory_record` / `get_decision_history` | decisions, tasks, questions | superseded decisions are returned with the id that replaced them |
+| `search_memory` / `list_memory` / `get_memory_record` / `get_decision_history` | decisions, tasks, questions | superseded decisions are returned with the id that replaced them; hits show `reviewed:false` / `origin` for unreviewed records and accept a `reviewed` filter; the history reports a proposed successor as `pending_id`, never as current |
 
 **Resources** (stable documents; five per project, created when the server starts):
 `project://<id>`, `/context`, `/decisions`, `/tasks`, `/recent-changes`. Anything that depends on a
@@ -53,6 +53,13 @@ restart.
 `review_recent_changes <project>`. They take one argument because Claude Code splits prompt
 arguments on whitespace. An unknown project returns an explanatory message listing the valid ids
 (the SDK hides exception text for prompts).
+
+## Review state in what Claude sees (Phase 2b)
+
+Records that Claude proposed (once the propose tools exist) are marked `reviewed:false`. They appear in
+search and in the snapshot's "Awaiting review (UNVERIFIED...)" section only, never as active
+decisions, open tasks or constraints; the server instructions tell the model to treat them as
+unverified proposals. A human accepts or rejects them with `aios review ...` (see MEMORY.md).
 
 ## Write access (not yet available)
 

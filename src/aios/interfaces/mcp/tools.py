@@ -18,6 +18,8 @@ from aios.domain.memory import RecordType
 from aios.interfaces.mcp.context import ServerContext
 from aios.interfaces.mcp.render import (
     compact,
+    compact_chain,
+    compact_hits,
     render_commit,
     render_diff,
     render_file,
@@ -26,8 +28,6 @@ from aios.interfaces.mcp.render import (
 from aios.services.context import build_context, render_context
 
 F = TypeVar("F", bound=Callable[..., Any])
-#: Hit fields that cost tokens but do not help a model (rank order is already conveyed).
-_HIT_NOISE = {"path", "score"}
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
 Project = Annotated[str, Field(description="Project id from list_projects, e.g. 'pulse'.")]
@@ -310,29 +310,42 @@ def register_tools(server: MCPServer, ctx: ServerContext) -> None:
         ] = None,
         status: Annotated[str | None, Field(description="e.g. active, superseded, open.")] = None,
         tag: str | None = None,
+        reviewed: Annotated[
+            bool | None,
+            Field(description="true: only reviewed records; false: only unreviewed proposals."),
+        ] = None,
         limit: Annotated[int, Field(description="Maximum hits (1-50).")] = 20,
     ) -> str:
         """Search the project memory (decisions with their reasons, tasks, open questions,
         constraints, notes). Check each hit's status: superseded decisions are returned too, with
-        the id that replaced them. Use get_memory_record for the full text."""
+        the id that replaced them. A hit with "reviewed":false is an UNVERIFIED proposal (for
+        example one Claude wrote), not an established fact or a decision in force. Use
+        get_memory_record for the full text."""
         args = {
             "query": query,
             "project": project,
             "record_type": record_type,
             "status": status,
             "tag": tag,
+            "reviewed": reviewed,
             "limit": limit,
         }
         result = ctx.run(
             "search_memory",
             lambda: ctx.memory.search(
-                query, project=project, record_type=record_type, status=status, tag=tag, limit=limit
+                query,
+                project=project,
+                record_type=record_type,
+                status=status,
+                tag=tag,
+                reviewed=reviewed,
+                limit=limit,
             ),
             project=project,
             args=args,
             summarize=lambda r: {"hits": len(r.hits), "layer": r.layer},
         )
-        return compact(result, exclude={"hits": {"__all__": _HIT_NOISE}})
+        return compact_hits(result, "hits")
 
     @tool("list_memory", "List memory records")
     def list_memory(
@@ -340,27 +353,38 @@ def register_tools(server: MCPServer, ctx: ServerContext) -> None:
         record_type: RecordType | None = None,
         status: Annotated[str | None, Field(description="e.g. open, active, superseded.")] = None,
         tag: str | None = None,
+        reviewed: Annotated[
+            bool | None,
+            Field(description="true: only reviewed records; false: only unreviewed proposals."),
+        ] = None,
         limit: Annotated[int, Field(description="Maximum records (1-200).")] = 50,
     ) -> str:
         """List memory records, newest first, without searching. Use for 'what are the open
-        tasks / questions / active decisions?'."""
+        tasks / questions / active decisions?'. Records with "reviewed":false are unverified
+        proposals; pass reviewed=true to list only established ones."""
         args = {
             "project": project,
             "record_type": record_type,
             "status": status,
             "tag": tag,
+            "reviewed": reviewed,
             "limit": limit,
         }
         result = ctx.run(
             "list_memory",
             lambda: ctx.memory.list_records(
-                project=project, record_type=record_type, status=status, tag=tag, limit=limit
+                project=project,
+                record_type=record_type,
+                status=status,
+                tag=tag,
+                reviewed=reviewed,
+                limit=limit,
             ),
             project=project,
             args=args,
             summarize=lambda r: {"records": len(r.records), "truncated": r.truncated},
         )
-        return compact(result, exclude={"records": {"__all__": _HIT_NOISE}})
+        return compact_hits(result, "records")
 
     @tool("get_memory_record", "Read a memory record")
     def get_memory_record(
@@ -384,9 +408,10 @@ def register_tools(server: MCPServer, ctx: ServerContext) -> None:
         ],
     ) -> str:
         """What a decision replaced and what replaced it, oldest first, with the reasons and the
-        reason for each change, and the current decision. Use for 'what was the previous
-        approach and why was it replaced?'."""
-        return compact(
+        reason for each change, and the current decision (the newest one in force). A proposed
+        successor awaiting review is reported as pending_id, never as current. Use for 'what was
+        the previous approach and why was it replaced?'."""
+        return compact_chain(
             ctx.run(
                 "get_decision_history",
                 lambda: ctx.memory.decision_history(record_id),

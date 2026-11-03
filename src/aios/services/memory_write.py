@@ -129,8 +129,8 @@ class MemoryWriter:
 
     def create(self, new: NewRecord, *, origin: Origin = "human") -> CreateResult:
         """Create a record. Raises ``InvalidRequestError`` with a reason if it is refused."""
-        with self._lock():
-            existing = self._load_all()
+        with self.lock():
+            existing = self.load_all()
             record = self._build(new, origin, existing)
             path = create_record_file(self._data_dir, record)
         notes = self._notes_for(record)
@@ -260,8 +260,8 @@ class MemoryWriter:
             raise InvalidRequestError(
                 f"status must be one of: {', '.join(sorted(VALID_STATUS['task']))}"
             )
-        with self._lock():
-            loaded = self._load_all().get(task_id.strip().upper())
+        with self.lock():
+            loaded = self.load_all().get(task_id.strip().upper())
             if loaded is None:
                 raise UnknownRecordError(f"no record with id {task_id.strip().upper()}")
             record = loaded.record
@@ -288,60 +288,69 @@ class MemoryWriter:
         A crash between the steps leaves a one-sided link that the reader already tolerates and
         ``aios doctor`` reports; running this again completes the second step.
         """
+        with self.lock():
+            return self.complete_supersession_locked(
+                successor_id, self.load_all(), accepted_by=accepted_by
+            )
+
+    def complete_supersession_locked(
+        self,
+        successor_id: str,
+        existing: dict[str, LoadedRecord],
+        *,
+        accepted_by: str | None = None,
+    ) -> list[str]:
+        """The body of :meth:`complete_supersession`; the caller already holds :meth:`lock`."""
         changed: list[str] = []
-        with self._lock():
-            existing = self._load_all()
-            loaded = existing.get(successor_id.strip().upper())
-            if loaded is None or loaded.record.type != "decision" or not loaded.record.supersedes:
-                raise InvalidRequestError(
-                    f"{successor_id} is not a decision that supersedes another"
-                )
-            succ = loaded.record
-            pred_loaded = existing.get(succ.supersedes or "")
-            if pred_loaded is None:
-                raise InvalidRequestError(f"{succ.supersedes} does not exist")
-            pred = pred_loaded.record
-            if pred.type != "decision" or pred.project != succ.project:
-                raise InvalidRequestError(f"{pred.id} is not a decision of project {succ.project}")
-            if pred.status not in ("active", "superseded") or (
-                pred.status == "superseded" and pred.superseded_by != succ.id
-            ):
-                raise InvalidRequestError(
-                    f"{pred.id} is {pred.status} (superseded_by {pred.superseded_by}); "
-                    f"it cannot be replaced by {succ.id}"
-                )
-            if succ.origin == "claude" and not accepted_by:
-                raise InvalidRequestError(
-                    f"{succ.id} was proposed by Claude; accepting it must record who accepted it"
-                )
-            if succ.status not in ("proposed", "active"):
-                raise InvalidRequestError(
-                    f"{succ.id} is {succ.status}; only a proposed or active decision "
-                    f"can replace {succ.supersedes}"
-                )
-            if succ.status != "active":
-                updates: dict[str, object] = {"status": "active", "reviewed": True}
-                if accepted_by:
-                    updates["accepted_by"] = accepted_by
-                updates["accepted_digest"] = decision_digest(succ)
-                edit_front_matter(self._data_dir / loaded.path, updates)
-                changed.append(f"{succ.id}: proposed -> active")
-            if pred.status != "superseded" or pred.superseded_by != succ.id:
-                edit_front_matter(
-                    self._data_dir / pred_loaded.path,
-                    {"status": "superseded", "superseded_by": succ.id},
-                )
-                changed.append(f"{pred.id}: {pred.status} -> superseded (by {succ.id})")
+        loaded = existing.get(successor_id.strip().upper())
+        if loaded is None or loaded.record.type != "decision" or not loaded.record.supersedes:
+            raise InvalidRequestError(f"{successor_id} is not a decision that supersedes another")
+        succ = loaded.record
+        pred_loaded = existing.get(succ.supersedes or "")
+        if pred_loaded is None:
+            raise InvalidRequestError(f"{succ.supersedes} does not exist")
+        pred = pred_loaded.record
+        if pred.type != "decision" or pred.project != succ.project:
+            raise InvalidRequestError(f"{pred.id} is not a decision of project {succ.project}")
+        if pred.status not in ("active", "superseded") or (
+            pred.status == "superseded" and pred.superseded_by != succ.id
+        ):
+            raise InvalidRequestError(
+                f"{pred.id} is {pred.status} (superseded_by {pred.superseded_by}); "
+                f"it cannot be replaced by {succ.id}"
+            )
+        if succ.origin == "claude" and not accepted_by:
+            raise InvalidRequestError(
+                f"{succ.id} was proposed by Claude; accepting it must record who accepted it"
+            )
+        if succ.status not in ("proposed", "active"):
+            raise InvalidRequestError(
+                f"{succ.id} is {succ.status}; only a proposed or active decision "
+                f"can replace {succ.supersedes}"
+            )
+        if succ.status != "active":
+            updates: dict[str, object] = {"status": "active", "reviewed": True}
+            if accepted_by:
+                updates["accepted_by"] = accepted_by
+            updates["accepted_digest"] = decision_digest(succ)
+            edit_front_matter(self._data_dir / loaded.path, updates)
+            changed.append(f"{succ.id}: proposed -> active")
+        if pred.status != "superseded" or pred.superseded_by != succ.id:
+            edit_front_matter(
+                self._data_dir / pred_loaded.path,
+                {"status": "superseded", "superseded_by": succ.id},
+            )
+            changed.append(f"{pred.id}: {pred.status} -> superseded (by {succ.id})")
         return changed
 
     # -- helpers -------------------------------------------------------------------------
 
-    def _lock(self) -> contextlib.AbstractContextManager[None]:
+    def lock(self) -> contextlib.AbstractContextManager[None]:
         cache = self._data_dir / INDEX_DIRNAME
         ensure_cache_dir(cache)
         return exclusive_lock(cache / "write.lock", self._cfg.lock_timeout_s, "memory write lock")
 
-    def _load_all(self) -> dict[str, LoadedRecord]:
+    def load_all(self) -> dict[str, LoadedRecord]:
         return {x.record.id: x for x in scan_memory(self._data_dir).records}
 
     def path_of(self, record: MemoryRecord) -> Path:

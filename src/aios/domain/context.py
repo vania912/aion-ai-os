@@ -37,5 +37,7 @@ class ProjectContext(BaseModel):
     open_tasks: list[MemoryHit] = Field(default_factory=list)
     open_questions: list[MemoryHit] = Field(default_factory=list)
     constraints: list[MemoryHit] = Field(default_factory=list)
+    #: Unreviewed records (for example Claude's proposals). Never counted as established above.
+    awaiting_review: list[MemoryHit] = Field(default_factory=list)
     #: section name -> why it could not be built (the rest of the snapshot is still returned)
     unavailable: dict[str, str] = Field(default_factory=dict)

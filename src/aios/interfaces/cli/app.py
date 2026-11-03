@@ -23,6 +23,7 @@ from aios.services.audit import AuditLog, audit_dir_exists
 from aios.services.files import FileService, build_file_service
 from aios.services.git import GitService, build_git_service
 from aios.services.memory import MemoryService, memory_dir_exists
+from aios.services.memory_review import MemoryReviewer
 from aios.services.memory_write import CreateResult, MemoryWriter, NewRecord
 from aios.services.registry import check_registry, load_registry
 
@@ -48,6 +49,8 @@ audit_app = typer.Typer(help="The audit log of operations.", no_args_is_help=Tru
 app.add_typer(audit_app, name="audit")
 task_app = typer.Typer(help="Tasks: add and change status.", no_args_is_help=True)
 app.add_typer(task_app, name="task")
+review_app = typer.Typer(help="Review records that Claude proposed.", no_args_is_help=True)
+app.add_typer(review_app, name="review")
 
 DataDirOption = Annotated[
     Path | None,
@@ -343,7 +346,8 @@ def git_branches(
 def _echo_hits(hits: list[MemoryHit], *, snippets: bool) -> None:
     for h in hits:
         note = f" -> {h.superseded_by}" if h.superseded_by else ""
-        typer.echo(f"{h.id}\t{h.status}{note}\t{h.project}\t{h.title}")
+        flag = "" if h.reviewed else f" UNREVIEWED({h.origin})"
+        typer.echo(f"{h.id}\t{h.status}{note}{flag}\t{h.project}\t{h.title}")
         if snippets and h.snippet:
             typer.echo(f"    {h.snippet}")
 
@@ -378,6 +382,7 @@ def memory_search(
     type: Annotated[str | None, typer.Option("--type")] = None,
     status: str | None = None,
     tag: str | None = None,
+    reviewed: Annotated[bool | None, typer.Option("--reviewed/--unreviewed")] = None,
     limit: int = 20,
     data_dir: DataDirOption = None,
 ) -> None:
@@ -385,7 +390,13 @@ def memory_search(
     service = _memory(data_dir)
     with _cli_errors():
         result = service.search(
-            query, project=project, record_type=type, status=status, tag=tag, limit=limit
+            query,
+            project=project,
+            record_type=type,
+            status=status,
+            tag=tag,
+            reviewed=reviewed,
+            limit=limit,
         )
     _echo_hits(result.hits, snippets=True)
     typer.echo(f"[layer={result.layer}{' truncated' if result.truncated else ''}]", err=True)
@@ -397,6 +408,7 @@ def memory_list(
     type: Annotated[str | None, typer.Option("--type")] = None,
     status: str | None = None,
     tag: str | None = None,
+    reviewed: Annotated[bool | None, typer.Option("--reviewed/--unreviewed")] = None,
     limit: int = 50,
     data_dir: DataDirOption = None,
 ) -> None:
@@ -404,7 +416,12 @@ def memory_list(
     service = _memory(data_dir)
     with _cli_errors():
         result = service.list_records(
-            project=project, record_type=type, status=status, tag=tag, limit=limit
+            project=project,
+            record_type=type,
+            status=status,
+            tag=tag,
+            reviewed=reviewed,
+            limit=limit,
         )
     _echo_hits(result.records, snippets=False)
     if result.truncated:
@@ -781,3 +798,135 @@ def memory_add(
             )
         )  # fmt: skip
         _created(settings, result)
+
+
+# -- review workflow (human CLI) --------------------------------------------------------------
+
+YesOpt = Annotated[bool, typer.Option("--yes", help="Do not ask for confirmation.")]
+
+
+@review_app.command("list")
+def review_list(
+    project: str | None = None,
+    type: Annotated[str | None, typer.Option("--type")] = None,
+    data_dir: DataDirOption = None,
+) -> None:
+    """List records awaiting review, newest first."""
+    settings = _settings(data_dir)
+    with _cli_errors():
+        pending = MemoryReviewer(settings.data_dir).list_pending(project=project, record_type=type)
+    for r in pending:
+        typer.echo(f"{r.id}\t{r.type}\t{r.status}\t{r.project}\t{r.origin}\t{r.date}\t{r.title}")
+    typer.echo(f"[{len(pending)} awaiting review]", err=True)
+
+
+@review_app.command("show")
+def review_show(
+    record_id: str,
+    as_name: Annotated[str | None, typer.Option("--as")] = None,
+    data_dir: DataDirOption = None,
+) -> None:
+    """Show a proposal in full and exactly what accepting it would change."""
+    settings = _settings(data_dir)
+    me = as_name or _whoami()
+    with _cli_errors():
+        plan = MemoryReviewer(settings.data_dir).plan_accept(record_id, accepted_by=me)
+    r = plan.record
+    state = "reviewed" if r.reviewed else "NOT REVIEWED"
+    typer.echo(f"{r.id}  [{r.status}]  {r.title}")
+    typer.echo(f"project: {r.project}  type: {r.type}  origin: {r.origin}  {state}  date: {r.date}")
+    typer.echo(f"file: {plan.path}")
+    for label, values in (
+        ("why", r.why),
+        ("alternatives", r.alternatives_considered),
+        ("evidence", r.evidence),
+        ("tags", r.tags),
+        ("files", r.related_files),
+    ):
+        for value in values:
+            typer.echo(f"{label}: {value}")
+    if r.reason_for_change:
+        typer.echo(f"reason for change: {r.reason_for_change}")
+    if r.body:
+        typer.echo("\n" + r.body)
+    if plan.predecessor is not None:
+        p = plan.predecessor
+        typer.echo(f"\nWould replace {p.id} [{p.status}] {p.title}")
+        for reason in p.why:
+            typer.echo(f"  its reason: {reason}")
+    typer.echo("\nIf you accept:")
+    for action in plan.actions:
+        typer.echo(f"  - {action}")
+    if plan.blocked:
+        typer.echo(f"BLOCKED: {plan.blocked}")
+    for warning in plan.warnings:
+        typer.echo(f"warning: {warning}")
+    if plan.similar:
+        typer.echo("\nSimilar records:")
+        for h in plan.similar:
+            typer.echo(f"  {h.id} [{h.status}] {h.title}")
+
+
+@review_app.command("accept")
+def review_accept(
+    record_id: str,
+    yes: YesOpt = False,
+    as_name: Annotated[
+        str | None, typer.Option("--as", help="Name recorded as the accepter.")
+    ] = None,
+    data_dir: DataDirOption = None,
+) -> None:
+    """Accept a proposal: it counts as reviewed (decisions also come into force)."""
+    settings = _settings(data_dir)
+    me = as_name or _whoami()
+    reviewer = MemoryReviewer(settings.data_dir)
+    with _cli_errors():
+        plan = reviewer.plan_accept(record_id, accepted_by=me)
+        if plan.blocked:
+            raise InvalidRequestError(plan.blocked)
+        typer.echo(f"{plan.record.id} [{plan.record.status}] {plan.record.title}")
+        for action in plan.actions:
+            typer.echo(f"  - {action}")
+        if not yes and not typer.confirm("Accept?", default=False):
+            typer.echo("cancelled; nothing changed")
+            raise typer.Exit(code=1)
+        changes = reviewer.accept(record_id, accepted_by=me)
+    if not changes:
+        typer.echo("nothing to do: already accepted")
+        return
+    _audit_write(
+        settings, "accept_record", plan.record.project,
+        {"id": plan.record.id, "type": plan.record.type},
+    )  # fmt: skip
+    for change in changes:
+        typer.echo(f"updated {change}")
+    typer.echo("(written to disk only; commit your data repo when you are ready)", err=True)
+
+
+@review_app.command("reject")
+def review_reject(
+    record_id: str,
+    reason: Annotated[str, typer.Option(help="Why (one line). Stored with the archived record.")],
+    yes: YesOpt = False,
+    data_dir: DataDirOption = None,
+) -> None:
+    """Reject a proposal: it is archived under _rejected/ and no longer searchable."""
+    settings = _settings(data_dir)
+    reviewer = MemoryReviewer(settings.data_dir)
+    with _cli_errors():
+        archived = reviewer.find_archived(record_id)
+        if archived is not None and not any(
+            r.id == record_id.strip().upper() for r in reviewer.list_pending()
+        ):
+            typer.echo(f"already archived -> {archived}")
+            return
+        plan = reviewer.plan_accept(record_id, accepted_by=_whoami())
+        r = plan.record
+        typer.echo(f"{r.id} [{r.status}] {r.title}")
+        if not yes and not typer.confirm("Reject and archive it?", default=False):
+            typer.echo("cancelled; nothing changed")
+            raise typer.Exit(code=1)
+        location = reviewer.reject(record_id, reason)
+    _audit_write(settings, "reject_record", r.project, {"id": r.id, "type": r.type})
+    typer.echo(f"archived {r.id} -> {location}")
+    typer.echo("(written to disk only; commit your data repo when you are ready)", err=True)

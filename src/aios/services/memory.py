@@ -96,6 +96,7 @@ class MemoryService:
         record_type: str | None = None,
         status: str | None = None,
         tag: str | None = None,
+        reviewed: bool | None = None,
         limit: int = 20,
     ) -> SearchResult:
         """Layered keyword search: exact id, then all terms, then any term.
@@ -115,7 +116,7 @@ class MemoryService:
         id_hits = [
             _hit_from(loaded)
             for loaded in (self._index.get(i) for i in ids)
-            if loaded is not None and _matches(loaded, project, record_type, status, tag)
+            if loaded is not None and _matches(loaded, project, record_type, status, tag, reviewed)
         ]
         if id_hits:
             return SearchResult(hits=id_hits[:limit], truncated=len(id_hits) > limit, layer="id")
@@ -123,15 +124,54 @@ class MemoryService:
         terms = query_terms(query, max_terms=cfg.max_query_terms)
         if not terms:
             raise InvalidRequestError("query has no searchable words")
-        filters = {"project": project, "record_type": record_type, "status": status, "tag": tag}
-        rows = self._index.search(build_match(terms, any_term=False), limit=limit + 1, **filters)
+
+        def run_query(any_term: bool) -> list[MemoryHit]:
+            return self._index.search(
+                build_match(terms, any_term=any_term),
+                project=project,
+                record_type=record_type,
+                status=status,
+                tag=tag,
+                reviewed=reviewed,
+                limit=limit + 1,
+            )
+
+        rows = run_query(any_term=False)
         layer = "keyword_all"
         if not rows and len(terms) > 1:
-            rows = self._index.search(build_match(terms, any_term=True), limit=limit + 1, **filters)
+            rows = run_query(any_term=True)
             layer = "keyword_any"
         if not rows:
             return SearchResult(hits=[], truncated=False, layer="none")
         return SearchResult(hits=rows[:limit], truncated=len(rows) > limit, layer=layer)
+
+    def find_similar(
+        self,
+        text: str,
+        *,
+        project: str | None = None,
+        exclude_id: str | None = None,
+        limit: int = 5,
+    ) -> list[MemoryHit]:
+        """Records whose text overlaps ``text`` (any shared word), best match first.
+
+        For duplicate checks. The normal search needs *all* words, so a proposal always matches
+        itself and never falls back to partial matches; this one matches on any word.
+        """
+        terms = query_terms(text, max_terms=self._cfg.max_query_terms)
+        if not terms:
+            return []
+        self._ensure_fresh()
+        rows = self._index.search(
+            build_match(terms, any_term=True),
+            project=project,
+            record_type=None,
+            status=None,
+            tag=None,
+            reviewed=None,
+            limit=limit + 2,
+        )
+        return [h for h in rows if h.id != exclude_id][:limit]
 
     def list_records(
         self,
@@ -140,6 +180,7 @@ class MemoryService:
         record_type: str | None = None,
         status: str | None = None,
         tag: str | None = None,
+        reviewed: bool | None = None,
         limit: int = 50,
     ) -> ListResult:
         """Metadata-only listing (the cheapest retrieval layer), newest first."""
@@ -148,7 +189,12 @@ class MemoryService:
             raise InvalidRequestError(f"limit must be between 1 and {self._cfg.max_list_results}")
         self._ensure_fresh()
         rows = self._index.list_records(
-            project=project, record_type=record_type, status=status, tag=tag, limit=limit + 1
+            project=project,
+            record_type=record_type,
+            status=status,
+            tag=tag,
+            reviewed=reviewed,
+            limit=limit + 1,
         )
         return ListResult(records=rows[:limit], truncated=len(rows) > limit)
 
@@ -235,10 +281,30 @@ class MemoryService:
                 supersedes=r.record.supersedes,
                 superseded_by=r.record.superseded_by,
                 position="earlier" if r in earlier else ("requested" if r is start else "later"),
+                reviewed=r.record.reviewed,
             )
             for r in ordered
         ]
-        return DecisionChain(chain=chain, current_id=ordered[-1].record.id, notes=notes)
+        # The current decision is the newest one actually in force: active AND reviewed. A
+        # proposed successor (awaiting review) is reported as pending, never as current.
+        in_force = [r for r in ordered if r.record.status == "active" and r.record.reviewed]
+        current = in_force[-1] if in_force else ordered[-1]
+        pending = [
+            r
+            for r in ordered[ordered.index(current) + 1 :]
+            if not r.record.reviewed or r.record.status == "proposed"
+        ]
+        if pending:
+            notes.append(
+                f"{pending[-1].record.id} is {pending[-1].record.status} and awaiting review; "
+                f"the decision in force is still {current.record.id}"
+            )
+        return DecisionChain(
+            chain=chain,
+            current_id=current.record.id,
+            notes=notes,
+            pending_id=pending[-1].record.id if pending else None,
+        )
 
     # -- integrity -----------------------------------------------------------------------
 
@@ -279,6 +345,13 @@ class MemoryService:
                 _check_decision(r, by_id, successors_of, err, warn)
             if r.type == "decision" and r.status == "active" and not r.reviewed:
                 err(r, "unreviewed_active", "an unreviewed decision must not be active")
+            if r.rejection_reason is not None:
+                err(
+                    r,
+                    "rejection_pending_move",
+                    "a rejection was recorded but the file was not moved; "
+                    "run `aios review reject` again",
+                )
             if r.origin == "claude" and r.reviewed and not r.accepted_by:
                 warn(
                     r,
@@ -377,7 +450,9 @@ def _check_decision(
             err(r, "supersedes_missing", f"supersedes {r.supersedes}, which does not exist")
         elif target.type != "decision" or target.project != r.project:
             err(r, "bad_supersession_target", f"{r.supersedes} is not a decision of {r.project}")
-        else:
+        elif r.status == "active":
+            # Only once the successor is in force: a pending proposal is expected to leave its
+            # predecessor untouched until it is accepted.
             if target.superseded_by != r.id:
                 warn(
                     r,
@@ -410,10 +485,12 @@ def _matches(
     record_type: str | None,
     status: str | None,
     tag: str | None,
+    reviewed: bool | None = None,
 ) -> bool:
     r = loaded.record
     return (
-        (project is None or r.project == project)
+        (reviewed is None or r.reviewed == reviewed)
+        and (project is None or r.project == project)
         and (record_type is None or r.type == record_type)
         and (status is None or r.status == status)
         and (tag is None or tag in r.tags)
@@ -433,6 +510,8 @@ def _hit_from(loaded: LoadedRecord) -> MemoryHit:
         snippet=r.title,
         score=1.0,
         path=loaded.path,
+        origin=r.origin,
+        reviewed=r.reviewed,
     )
 
 

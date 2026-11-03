@@ -100,6 +100,7 @@ class MemoryRecord(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     accepted_by: str | None = None
     accepted_digest: str | None = None
+    rejection_reason: str | None = None
     # decision-only
     made_by: list[str] = Field(default_factory=list)
     why: list[str] = Field(default_factory=list)
@@ -154,6 +155,15 @@ class MemoryRecord(BaseModel):
             not 1 <= len(value.strip()) <= 80 or _BAD_CONTROL.search(value) or "\n" in value
         ):
             raise ValueError("accepted_by must be a single-line name of 1-80 characters")
+        return value
+
+    @field_validator("rejection_reason")
+    @classmethod
+    def _rejection_reason(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not 1 <= len(value.strip()) <= 300 or _BAD_CONTROL.search(value) or "\n" in value
+        ):
+            raise ValueError("rejection_reason must be single-line text of 1-300 characters")
         return value
 
     @field_validator("accepted_digest")
@@ -263,6 +273,8 @@ class MemoryHit(BaseModel):
     snippet: str
     score: float
     path: str
+    origin: str = "human"
+    reviewed: bool = True
 
 
 class SearchResult(BaseModel):
@@ -301,14 +313,17 @@ class ChainEntry(BaseModel):
     supersedes: str | None
     superseded_by: str | None
     position: Literal["earlier", "requested", "later"]
+    reviewed: bool = True
 
 
 class DecisionChain(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     chain: list[ChainEntry]  # oldest first
-    current_id: str  # newest decision in the chain
+    current_id: str  # newest *active, reviewed* decision in the chain (see pending_id)
     notes: list[str]  # inconsistencies found while walking (broken links, cycles, ...)
+    #: A proposed successor that is not in force yet (awaiting review), if any.
+    pending_id: str | None = None
 
 
 class IndexStatus(BaseModel):

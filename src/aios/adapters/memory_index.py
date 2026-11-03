@@ -26,7 +26,7 @@ from aios.domain.memory import (
 )
 from aios.errors import MemoryStoreError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -39,6 +39,8 @@ CREATE TABLE records(
     date TEXT NOT NULL,
     supersedes TEXT,
     superseded_by TEXT,
+    origin TEXT NOT NULL DEFAULT 'human',
+    reviewed INTEGER NOT NULL DEFAULT 1,
     path TEXT NOT NULL,
     json TEXT NOT NULL
 );
@@ -132,10 +134,11 @@ class MemoryIndex:
         r = loaded.record
         cursor = conn.execute(
             "INSERT INTO records(id, project, type, title, status, date, supersedes, "
-            "superseded_by, path, json) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "superseded_by, origin, reviewed, path, json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 r.id, r.project, r.type, r.title, r.status, r.date.isoformat(),
-                r.supersedes, r.superseded_by, loaded.path, r.model_dump_json(),
+                r.supersedes, r.superseded_by, r.origin, int(r.reviewed), loaded.path,
+                r.model_dump_json(),
             ),
         )  # fmt: skip
         extra = " ".join(
@@ -221,10 +224,12 @@ class MemoryIndex:
         status: str | None,
         tag: str | None,
         limit: int,
+        reviewed: bool | None = None,
     ) -> list[MemoryHit]:
-        where, params = self._filters(project, record_type, status, tag)
+        where, params = self._filters(project, record_type, status, tag, reviewed)
         sql = (
-            "SELECT r.id, r.project, r.type, r.title, r.status, r.date, r.superseded_by, r.path "
+            "SELECT r.id, r.project, r.type, r.title, r.status, r.date, r.superseded_by, "
+            "r.origin, r.reviewed, r.path "
             f"FROM records r {where} ORDER BY r.date DESC, r.id DESC LIMIT ?"
         )
         with self._read() as conn:
@@ -240,11 +245,13 @@ class MemoryIndex:
         status: str | None,
         tag: str | None,
         limit: int,
+        reviewed: bool | None = None,
     ) -> list[MemoryHit]:
-        where, params = self._filters(project, record_type, status, tag)
+        where, params = self._filters(project, record_type, status, tag, reviewed)
         where = (where + " AND " if where else "WHERE ") + "records_fts MATCH ?"
         sql = (
-            "SELECT r.id, r.project, r.type, r.title, r.status, r.date, r.superseded_by, r.path, "
+            "SELECT r.id, r.project, r.type, r.title, r.status, r.date, r.superseded_by, "
+            "r.origin, r.reviewed, r.path, "
             f"snippet(records_fts, {_SNIPPET_COLUMN}, '[', ']', '…', 16) AS snippet, "
             "bm25(records_fts, 6.0, 1.0, 2.0, 3.0) AS rank "
             "FROM records_fts JOIN records r ON r.rowid = records_fts.rowid "
@@ -259,10 +266,17 @@ class MemoryIndex:
 
     @staticmethod
     def _filters(
-        project: str | None, record_type: str | None, status: str | None, tag: str | None
-    ) -> tuple[str, list[str]]:
+        project: str | None,
+        record_type: str | None,
+        status: str | None,
+        tag: str | None,
+        reviewed: bool | None = None,
+    ) -> tuple[str, list[str | int]]:
         clauses: list[str] = []
-        params: list[str] = []
+        params: list[str | int] = []
+        if reviewed is not None:
+            clauses.append("r.reviewed = ?")
+            params.append(int(reviewed))
         for column, value in (("project", project), ("type", record_type), ("status", status)):
             if value is not None:
                 clauses.append(f"r.{column} = ?")
@@ -285,4 +299,6 @@ def _hit(row: sqlite3.Row, *, snippet: str, score: float) -> MemoryHit:
         snippet=snippet,
         score=score,
         path=row["path"],
+        origin=row["origin"],
+        reviewed=bool(row["reviewed"]),
     )

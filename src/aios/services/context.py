@@ -47,13 +47,24 @@ def build_context(
             unavailable["git"] = str(exc)
 
     def records(
-        name: str, record_type: str, statuses: tuple[str, ...], limit: int
+        name: str,
+        record_type: str | None,
+        statuses: tuple[str | None, ...],
+        limit: int,
+        *,
+        reviewed: bool = True,
     ) -> list[MemoryHit]:
+        """Records for one section. Established sections take reviewed records only; the
+        "awaiting review" section takes the unreviewed ones."""
         try:
             found: list[MemoryHit] = []
             for status in statuses:
                 found += memory.list_records(
-                    project=project_id, record_type=record_type, status=status, limit=limit
+                    project=project_id,
+                    record_type=record_type,
+                    status=status,
+                    reviewed=reviewed,
+                    limit=limit,
                 ).records
             found.sort(key=lambda h: (h.date, h.id), reverse=True)
             return found[:limit]
@@ -71,8 +82,14 @@ def build_context(
         open_tasks=records("tasks", "task", _OPEN_TASK_STATUSES, per_section),
         open_questions=records("questions", "question", ("open",), per_section),
         constraints=records("constraints", "constraint", ("active",), per_section),
+        awaiting_review=records("awaiting_review", None, (None,), per_section, reviewed=False),
         unavailable=unavailable,
     )
+
+
+def _hit_line(h: MemoryHit) -> str:
+    marks = [h.status] + ([] if h.reviewed else [f"unreviewed, {h.origin}"])
+    return f"- {h.id} [{', '.join(marks)}] {h.date} {h.title}"
 
 
 def render_context(ctx: ProjectContext) -> str:
@@ -104,10 +121,11 @@ def render_context(ctx: ProjectContext) -> str:
         ("Open tasks", ctx.open_tasks),
         ("Open questions", ctx.open_questions),
         ("Active constraints", ctx.constraints),
+        ("Awaiting review (UNVERIFIED, not established facts)", ctx.awaiting_review),
     ):
         if hits:
             lines.append(f"## {title}")
-            lines += [f"- {h.id} [{h.status}] {h.date} {h.title}" for h in hits]
+            lines += [_hit_line(h) for h in hits]
             lines.append("")
     if ctx.unavailable:
         lines.append("## Unavailable")

@@ -33,7 +33,8 @@ def _hits_markdown(title: str, hits: list[MemoryHit], truncated: bool) -> str:
         lines.append("(none)")
     for h in hits:
         arrow = f" -> superseded by {h.superseded_by}" if h.superseded_by else ""
-        lines.append(f"- {h.id} [{h.status}{arrow}] {h.date} {h.title}")
+        flag = "" if h.reviewed else f", UNREVIEWED ({h.origin})"
+        lines.append(f"- {h.id} [{h.status}{arrow}{flag}] {h.date} {h.title}")
     if truncated:
         lines.append("(more not shown; use list_memory or search_memory)")
     return "\n".join(lines) + "\n"

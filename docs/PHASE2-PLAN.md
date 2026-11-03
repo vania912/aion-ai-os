@@ -1,6 +1,6 @@
 # Phase 2 plan — persistent memory (writes)
 
-Status: **D1–D4 decided by the user, D5–D7 assumed (see ADR-0009). Step 2a is implemented; 2b–2d not started.**
+Status: **D1–D4 decided by the user, D5–D7 assumed (see ADR-0009). Steps 2a and 2b are implemented; 2c–2d not started.**
 Date: 2026-11-03. No Phase 2 code exists.
 Legend: **[V]** verified against a source named in the text · **[U]** unverified or remembered ·
 **[J]** my judgement.
@@ -222,3 +222,19 @@ Differences from the plan (all small):
   always equals its re-parsed file.
 - The shared lock moved to `adapters/filelock.py` (audit and memory writes use it).
 - The quota default (20) and body cap (8,000 characters) are still my estimates.
+
+## 12. Step 2b result (2026-11-03)
+
+Done: `aios review list|show|accept|reject`; idempotent acceptance (including finishing a
+half-applied supersession); `_rejected/` archive (not indexed, ids never reused); review state in
+the index (schema v2), search/list (with a `reviewed` filter), the project snapshot ("Awaiting
+review" section), resources, decision history (`pending_id`, `current_id` stays the decision in
+force) and the MCP output and instructions; doctor checks for an unfinished rejection.
+
+Differences from the plan:
+- `review accept` / `reject` ask for confirmation (`--yes` skips). This is a reading aid, not a
+  security control (see MEMORY.md); the plan did not specify it.
+- Added `rejection_reason` to the record schema and a dedicated `find_similar` lookup (the
+  plan's duplicate check could not work through the normal search: see MEMORY.md).
+- Doctor's reciprocity warnings now apply only to successors that are in force.
+- Not done in 2b (by plan): verifying `accepted_digest`, stale-proposal reports (2d).

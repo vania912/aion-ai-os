@@ -8,7 +8,8 @@ execution and verification separate.
 **Status:** Phase 1 is implemented: a read-only MCP server (`aios serve`) over projects, git
 history and memory, backed by a policy engine and a hash-chained audit log, plus a debugging CLI.
 Phase 2a adds human-authored memory writes from the CLI (decisions with supersession, tasks,
-notes); Claude still cannot write. It awaits your review and a check on your Windows machine.
+notes); Phase 2b adds the review workflow (`aios review ...`) for records Claude will propose.
+Claude still cannot write. It awaits your review and a check on your Windows machine.
 Nothing can modify a project yet (Phases 3-4 are not started).
 
 - Architecture proposal: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)

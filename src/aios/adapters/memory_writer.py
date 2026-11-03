@@ -30,7 +30,7 @@ from aios.errors import MemoryStoreError
 
 #: Front-matter keys the tools and CLI may edit in an existing record.
 EDITABLE_KEYS: frozenset[str] = frozenset(
-    {"status", "superseded_by", "reviewed", "accepted_by", "accepted_digest"}
+    {"status", "superseded_by", "reviewed", "accepted_by", "accepted_digest", "rejection_reason"}
 )
 _FRONT = re.compile(r"\A---\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
 _PLAIN_VALUE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -67,6 +67,7 @@ def render_record(record: MemoryRecord) -> str:
         "made_by", "why", "alternatives_considered", "assumptions", "constraints",
         "supersedes", "superseded_by", "reason_for_change", "related_files", "related_tasks",
         "related_decisions", "tags", "evidence", "accepted_by", "accepted_digest",
+        "rejection_reason",
     ):  # fmt: skip
         value = getattr(record, name)
         if value not in (None, [], ""):

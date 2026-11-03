@@ -4,10 +4,10 @@ Code: `src/aios/domain/memory.py`, `src/aios/adapters/memory_files.py`,
 `src/aios/adapters/memory_index.py`, `src/aios/services/memory.py`.
 Design background: ARCHITECTURE.md section D and ADR-0003.
 
-**Scope today:** reading (Phase 1) plus **human-authored writes** from the CLI (Phase 2a). The
-writer is shared with the MCP propose tools that arrive in Phase 2c, but **Claude cannot write
-memory yet**: the MCP server is still read-only. There is no `aios review` workflow yet (2b), and
-`accepted_digest` is written but not yet verified (2d). Decisions are in
+**Scope today:** reading (Phase 1), human-authored writes from the CLI (Phase 2a) and the **review
+workflow** for records that Claude will propose (Phase 2b). **Claude cannot write memory yet**: the
+MCP server is still read-only and the propose tools arrive in Phase 2c. `accepted_digest` is
+written on acceptance but not yet verified (2d). Decisions are in
 [ADR-0009](adr/0009-phase2-write-model.md); the plan is in [PHASE2-PLAN.md](PHASE2-PLAN.md).
 
 ## Where records live
@@ -102,8 +102,58 @@ Rules the writer enforces (the same code will serve Claude's proposals):
 - **Never edited:** a record's title, reasons, alternatives and body after creation (not exposed).
 
 New optional fields (all backward compatible; old files stay valid): `origin`, `reviewed`,
-`evidence` (what a claim rests on), `accepted_by`, `accepted_digest`. Text fields reject NUL and
+`evidence` (what a claim rests on), `accepted_by`, `accepted_digest`, `rejection_reason`. Text fields reject NUL and
 other control characters, and bodies are stored with LF endings and no outer blank lines.
+
+## Reviewing proposals (Phase 2b)
+
+Records created for Claude are `origin: claude`, `reviewed: false` (a decision is also `proposed`).
+Until a human accepts them they are **unverified**: they are returned by search and `get_memory_record`
+with the state shown, but they never count as established.
+
+```
+aios review list [--project P] [--type T]     # the queue, newest first
+aios review show <id> [--as NAME]             # full content, evidence, similar records, what accepting does
+aios review accept <id> [--yes] [--as NAME]   # asks first; --yes skips the question
+aios review reject <id> --reason "..." [--yes]
+aios memory list|search --unreviewed | --reviewed
+```
+
+- **Accept.** A decision becomes `active`, `reviewed`, with `accepted_by` and `accepted_digest`;
+  if it supersedes another decision, that one becomes `superseded` (successor first, then
+  predecessor, as in 2a). Other record types only become `reviewed` (status unchanged). Accepting
+  again is a no-op, and accepting a reviewed successor whose predecessor was never updated finishes
+  that step. **Blocked** (with the reason shown): a decision that is not `proposed` or `active`, or
+  one whose predecessor is no longer active ("reject this proposal instead").
+- **Reject.** Only unreviewed records can be rejected. The reason is recorded in the file
+  (`rejection_reason`; a decision also gets status `rejected`) and the file moves to
+  `projects/<project>/_rejected/<type-dir>/`, where it is **not indexed or searchable**. Its id is
+  never reused. A superseding proposal that is rejected leaves its predecessor untouched. Rejecting
+  again is a no-op. If a crash happens after the reason is recorded but before the move, `aios
+  doctor` reports `rejection_pending_move` and rerunning the reject finishes it.
+- **The confirmation prompt is a convenience, not a security control.** It makes you read what
+  accepting changes. Claude could answer it from a shell command, so the real controls are the
+  Claude Code deny rule on these commands (ADR-0009, D2: pattern-based, with documented limits), the
+  unreviewed labelling below, and the audit log (`accept_record` / `reject_record`, actor `cli`, id
+  and type only, never content or the reason).
+- **What "unverified" means in every view:**
+  - the project snapshot (`get_project_context`) and the `project://<id>/context` resource list
+    unreviewed records only under "Awaiting review (UNVERIFIED, not established facts)", never under
+    active decisions, open tasks, questions or constraints;
+  - `search_memory` / `list_memory` hits carry `"reviewed":false,"origin":"claude"` (omitted for
+    trusted records to save tokens) and take a `reviewed` filter; `aios memory search|list` print
+    `UNREVIEWED(claude)`;
+  - `get_decision_history` reports a proposed successor as `pending_id` and keeps `current_id` on
+    the decision actually in force, with a note;
+  - the server instructions and tool descriptions tell the model to treat `reviewed:false` as an
+    unverified proposal.
+- **Similar records.** `review show` lists existing records that share words with the proposal's
+  title (any shared word, best match first, never the record itself), as a duplicate check. It is a
+  keyword overlap, so it is noisy for very short or generic titles.
+- **`aios doctor`** no longer reports "not reciprocal / predecessor not superseded" for a *pending*
+  proposal (that state is expected); it still does once a successor is in force.
+- The search index schema is now version 2 (`origin`, `reviewed` columns). An index from before
+  rebuilds itself on the next query.
 
 ## Decision lifecycle
 
@@ -117,7 +167,8 @@ reasons and the `reason_for_change` of each replacement, and the current decisio
 `predecessor_not_superseded` (warning), `bad_supersession_target`, `multiple_successors`,
 `supersession_cycle`, `dangling_reference` (warning), `unknown_project` (warning, needs the registry),
 `unreviewed_active` (an unreviewed decision marked active), `reviewed_without_acceptance` (warning),
-`review_backlog` (warning at 20 unreviewed), plus file problems: `invalid_record`,
+`review_backlog` (warning at 20 unreviewed), `rejection_pending_move` (a rejection was recorded but the
+file was not archived yet), plus file problems: `invalid_record`,
 `location_mismatch`, `duplicate_id`, `file_too_large`, `unexpected_file` (warning),
 `bad_project_dir`. One bad file is skipped and reported; it never stops the index or the other
 records.
@@ -168,6 +219,18 @@ before it reaches FTS5.
   Python (SQLite 3.50.4, spike result). If FTS5 is missing, rebuilding raises a clear error.
 
 ## Test evidence
+
+Phase 2b adds about 75 tests (828 pass in total locally on Linux, 1 POSIX-skip): read-side review
+state (index migration, filters, snapshot sections, resource markers, "pending is not current" in
+history, MCP output), the review service (every accept path, every blocking rule, reject and its
+crash recovery, concurrent accepts and rejects, Windows-style move retries, symlinked archive
+refused, unrelated files byte-identical) and the review CLI (prompts answered y, n and not at all,
+`--yes`, audit events without content, nothing committed to a git data repo). 22 deliberate
+breakages of this code each make the suite fail (three first needed their patterns corrected
+because the code had been reformatted). Findings fixed along the way: the similarity lookup could
+never find a near-duplicate, because the proposal always matched its own title in the all-words
+layer; pending proposals produced misleading doctor warnings; rejecting an already archived record
+failed from the CLI instead of being a no-op.
 
 Phase 1 (read path): 489 tests and 17 deliberate breakages, all caught (details in the Phase 1 commit
 history). Phase 2a adds about 265 tests (754 pass in total locally on Linux, 1 POSIX-skip):
