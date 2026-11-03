@@ -19,12 +19,14 @@ from aios.domain.git import ChangedFile
 from aios.domain.memory import MemoryHit
 from aios.domain.models import Issue, Registry, Severity
 from aios.errors import AiosError, InvalidRequestError
+from aios.interfaces.cli.plan_cmds import Helpers, register_plan_commands
 from aios.services.audit import AuditLog, audit_dir_exists
 from aios.services.files import FileService, build_file_service
 from aios.services.git import GitService, build_git_service
 from aios.services.memory import MemoryService, memory_dir_exists
 from aios.services.memory_review import MemoryReviewer
 from aios.services.memory_write import CreateResult, MemoryWriter, NewRecord
+from aios.services.plans import PlanService
 from aios.services.registry import check_registry, load_registry
 
 app = typer.Typer(
@@ -133,6 +135,7 @@ def doctor(data_dir: DataDirOption = None) -> None:
     issues = check_registry(registry)
     if memory_dir_exists(settings.data_dir):
         issues += MemoryService(settings.data_dir, registry=registry).check()
+    issues += PlanService(settings.data_dir, registry=registry).check()
     if audit_dir_exists(settings.data_dir):
         audit = AuditLog(settings.data_dir, actor="cli").verify()
         for p in audit.problems:
@@ -949,3 +952,9 @@ def review_reject(
     _audit_write(settings, "reject_record", r.project, {"id": r.id, "type": r.type})
     typer.echo(f"archived {r.id} -> {location}")
     typer.echo("(written to disk only; commit your data repo when you are ready)", err=True)
+
+
+register_plan_commands(
+    app,
+    Helpers(settings=_settings, registry=_load, errors=_cli_errors, audit=_audit_write),
+)
