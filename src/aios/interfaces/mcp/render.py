@@ -19,7 +19,12 @@ def compact(model: BaseModel, exclude: Any = None) -> str:
 
 def _meta(model: BaseModel, exclude: set[str]) -> str:
     data: dict[str, Any] = model.model_dump(mode="json", exclude=exclude, exclude_none=True)
-    data = {k: v for k, v in data.items() if v not in ([], {}, "", False, 0)}
+    keep_even_if_false = {"reviewed"}  # an unreviewed record must never look reviewed
+    data = {
+        k: v for k, v in data.items() if k in keep_even_if_false or v not in ([], {}, "", False, 0)
+    }
+    if data.get("origin") == "human":
+        del data["origin"]
     return json.dumps(data, separators=(",", ":"), ensure_ascii=False)
 
 

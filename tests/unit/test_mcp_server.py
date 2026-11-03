@@ -451,3 +451,51 @@ def test_concurrent_calls_all_succeed_and_the_audit_chain_stays_valid(world: Wor
     assert len(results) == 20 and all(results)
     verified = world.ctx.audit.verify()
     assert verified.ok and verified.events == 40
+
+
+def test_an_unreviewed_record_never_renders_as_reviewed() -> None:
+    from aios.domain.memory import MemoryRecord, MemoryRecordView
+    from aios.interfaces.mcp.render import render_record
+
+    record = MemoryRecord(
+        id="TSK-0001",
+        type="task",
+        project="pulse",
+        title="t",
+        status="open",
+        date="2026-10-01",
+        origin="claude",
+        reviewed=False,
+    )
+    first_line = render_record(
+        MemoryRecordView(record=record, path="p", body_truncated=False)
+    ).splitlines()[0]
+    assert '"reviewed":false' in first_line and '"origin":"claude"' in first_line
+    trusted = record.model_copy(update={"origin": "human", "reviewed": True})
+    text = render_record(MemoryRecordView(record=trusted, path="p", body_truncated=False))
+    assert '"origin"' not in text
+
+
+def test_propose_operations_are_denied_unless_the_server_is_started_with_the_flag(
+    world: World,
+) -> None:
+    from aios.interfaces.mcp.context import PROPOSE_OPERATIONS
+
+    for operation in PROPOSE_OPERATIONS:
+        decision = world.ctx.policy.authorize(operation)
+        assert (
+            not decision.allowed
+            and decision.level is not None
+            and decision.level.value == "propose"
+        )
+    server, ctx = build_server(world.data, allow_propose=True)
+    for operation in PROPOSE_OPERATIONS:
+        assert ctx.policy.authorize(operation).allowed
+    for operation in OPERATIONS:  # read-only ones are unaffected either way
+        assert ctx.policy.authorize(operation).allowed
+    assert (
+        not ctx.policy.authorize("write_file").allowed
+        and not ctx.policy.authorize("git_push").allowed
+    )
+    # Until the propose tools exist (2c) the flag adds no tools: the surface is unchanged.
+    assert len(run(server.list_tools())) == 14 and "READ-ONLY" in (server.instructions or "")

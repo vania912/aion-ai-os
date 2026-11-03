@@ -77,6 +77,14 @@ def build_match(terms: Sequence[str], *, any_term: bool) -> str:
     return (" OR " if any_term else " ").join(quoted)
 
 
+def ensure_cache_dir(directory: Path) -> None:
+    """Create the derived-data directory and keep it out of a git data repository."""
+    directory.mkdir(parents=True, exist_ok=True)
+    ignore = directory / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text("*\n", encoding="utf-8")
+
+
 class MemoryIndex:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -84,10 +92,7 @@ class MemoryIndex:
     # -- build ---------------------------------------------------------------------------
 
     def rebuild(self, records: Sequence[LoadedRecord], fingerprint: str) -> IndexStatus:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        ignore = self.path.parent / ".gitignore"  # keep the derived cache out of a data repo
-        if not ignore.exists():
-            ignore.write_text("*\n", encoding="utf-8")
+        ensure_cache_dir(self.path.parent)
         tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
         tmp.unlink(missing_ok=True)
         built_at = datetime.now(UTC).isoformat(timespec="seconds")

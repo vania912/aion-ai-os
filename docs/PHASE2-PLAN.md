@@ -1,6 +1,6 @@
 # Phase 2 plan — persistent memory (writes)
 
-Status: **D1–D4 decided by the user, D5–D7 assumed (see ADR-0009); awaiting your go to start 2a.**
+Status: **D1–D4 decided by the user, D5–D7 assumed (see ADR-0009). Step 2a is implemented; 2b–2d not started.**
 Date: 2026-11-03. No Phase 2 code exists.
 Legend: **[V]** verified against a source named in the text · **[U]** unverified or remembered ·
 **[J]** my judgement.
@@ -202,3 +202,23 @@ If you do not object, D5, D6 and D7 proceed as recommended.
 
 D1–D7 are recorded in [ADR-0009](adr/0009-phase2-write-model.md). I will start 2a when you say go;
 nothing is built before that.
+
+## 11. Step 2a result (2026-11-03)
+
+Done: provenance and review fields; atomic writer with id allocation and targeted edits; write
+service with the Claude-origin rules (evidence, quota, body cap, proposed-never-active);
+idempotent supersession completion; task transitions; human CLI (`decision create`, `task add`,
+`task status`, `memory add`); `--allow-propose` policy plumbing; doctor checks for the review
+invariants. Exit criteria: comment-preserving edits and hostile-input round trips are tested;
+concurrent creates give unique ids (threads and processes); Windows CI is the remaining check
+and is reported separately.
+
+Differences from the plan (all small):
+- Added `aios decision repair` (finishes a half-applied supersession), which the plan only implied.
+- `accepted_digest` is computed when a supersession is completed; verifying it (and a general
+  accept flow) is still 2b/2d.
+- Accepting a Claude-proposed decision now *requires* an accepter name (found while testing).
+- Record bodies are normalised by the model (LF endings, outer blank lines stripped) so a record
+  always equals its re-parsed file.
+- The shared lock moved to `adapters/filelock.py` (audit and memory writes use it).
+- The quota default (20) and body cap (8,000 characters) are still my estimates.

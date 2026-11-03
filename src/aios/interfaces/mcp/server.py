@@ -35,9 +35,9 @@ How to work:
 
 
 def build_server(
-    data_dir: Path, *, audit: AuditLog | None = None
+    data_dir: Path, *, audit: AuditLog | None = None, allow_propose: bool = False
 ) -> tuple[MCPServer, ServerContext]:
-    ctx = ServerContext(data_dir, audit=audit)
+    ctx = ServerContext(data_dir, audit=audit, allow_propose=allow_propose)
     server = MCPServer(
         "aios",
         title="AI OS",
@@ -51,12 +51,12 @@ def build_server(
     return server, ctx
 
 
-def serve(data_dir: Path) -> None:
+def serve(data_dir: Path, *, allow_propose: bool = False) -> None:
     """Run over stdio until the client closes it. Logging goes to stderr only: stdout is the
     protocol channel and anything else written there corrupts it."""
     configure_logging("INFO")
-    server, ctx = build_server(data_dir)
+    server, ctx = build_server(data_dir, allow_propose=allow_propose)
     # Fail at start-up, with a clear message, if the audit log cannot be written (tool calls
     # would all be refused anyway: request events are written before anything runs).
-    ctx.audit.note("server_start", args={"version": __version__})
+    ctx.audit.note("server_start", args={"version": __version__, "allow_propose": allow_propose})
     server.run()

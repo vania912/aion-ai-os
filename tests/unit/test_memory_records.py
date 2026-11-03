@@ -159,3 +159,57 @@ def test_yaml_alias_bombs_are_rejected_quickly() -> None:
 
 def test_plain_anchors_free_yaml_still_works() -> None:
     assert parse_record(GOOD.replace("title: T", "title: 'a & b * c'")).title == "a & b * c"
+
+
+# -- Phase 2 fields -----------------------------------------------------------------------
+
+
+def test_phase2_fields_default_to_a_trusted_human_record() -> None:
+    r = make()
+    assert (r.origin, r.reviewed, r.evidence, r.accepted_by, r.accepted_digest) == (
+        "human", True, [], None, None,
+    )  # fmt: skip
+
+
+def test_phase2_fields_accept_valid_values() -> None:
+    evidence = ["commit 1e9d7eb7a7", "src/app.py:42", "DEC-0003"]
+    r = make(
+        origin="claude", reviewed=False, evidence=evidence,
+        accepted_by="Vania", accepted_digest="a" * 64,
+    )  # fmt: skip
+    assert r.origin == "claude" and r.reviewed is False and len(r.evidence) == 3
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"origin": "robot"}, "Input should be"),
+        ({"reviewed": "maybe"}, "valid boolean"),
+        ({"evidence": ["x"] * 21}, "at most 20"),
+        ({"evidence": [""]}, "single-line"),
+        ({"evidence": ["a\nb"]}, "single-line"),
+        ({"evidence": ["x" * 301]}, "single-line"),
+        ({"evidence": ["a\x00b"]}, "single-line"),
+        ({"accepted_by": ""}, "single-line"),
+        ({"accepted_by": "a\nb"}, "single-line"),
+        ({"accepted_digest": "XYZ"}, "64-character"),
+        ({"accepted_digest": "A" * 64}, "64-character"),
+        ({"title": "two\nlines"}, "single line"),
+        ({"title": "nul\x00char"}, "single line"),
+        ({"why": ["bell\x07"]}, "control characters"),
+        ({"reason_for_change": "esc\x1b"}, "control characters"),
+        ({"body": "nul\x00"}, "control characters"),
+    ],
+)
+def test_phase2_validation(overrides: dict[str, object], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        make(**overrides)
+
+
+def test_tabs_and_newlines_stay_legal_in_bodies_and_reasons() -> None:
+    r = make(body="line one\n\tindented\r\nline three", why=["tab\tseparated"])
+    assert "indented" in r.body
+
+
+def test_old_records_without_the_new_fields_still_parse() -> None:
+    assert parse_record(GOOD).reviewed is True

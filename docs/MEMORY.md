@@ -4,9 +4,11 @@ Code: `src/aios/domain/memory.py`, `src/aios/adapters/memory_files.py`,
 `src/aios/adapters/memory_index.py`, `src/aios/services/memory.py`.
 Design background: ARCHITECTURE.md section D and ADR-0003.
 
-**Scope today: read only.** Humans create and edit records by hand (an example is in
-`examples/memory/`). Claude-initiated writes, `aios decision create`, project-state snapshots and
-the "immutable after active" rule for decisions belong to Phase 2 and are **not enforced yet**.
+**Scope today:** reading (Phase 1) plus **human-authored writes** from the CLI (Phase 2a). The
+writer is shared with the MCP propose tools that arrive in Phase 2c, but **Claude cannot write
+memory yet**: the MCP server is still read-only. There is no `aios review` workflow yet (2b), and
+`accepted_digest` is written but not yet verified (2d). Decisions are in
+[ADR-0009](adr/0009-phase2-write-model.md); the plan is in [PHASE2-PLAN.md](PHASE2-PLAN.md).
 
 ## Where records live
 
@@ -56,6 +58,53 @@ Statuses: decision `proposed|active|superseded|deprecated|rejected`; task
 note `active|archived`. Decision-only fields on other types are rejected, as are unknown fields
 (typos are errors). All problems in a file are reported together.
 
+## Writing records (Phase 2a)
+
+```
+aios decision create <project> --title T --why W [--why W2] [--alternative A] [--made-by NAME]
+                     [--supersedes DEC-0001 --reason-for-change R] [--tag t] [--body TEXT | --body-file F]
+aios decision repair <id>          # finish a half-applied supersession (safe to repeat)
+aios task add <project> --title T [--tag t] [--related-decision DEC-0002] [--body ...]
+aios task status <id> <open|in_progress|blocked|done|cancelled>
+aios memory add <project> --type assumption|constraint|question|discovery|note --title T [...]
+```
+
+Records created this way are `origin: human`, `reviewed: true`, dated today, with ids allocated
+for you (never reused, including ids of rejected or unparseable files). Nothing is committed: the
+data repository changes on disk only. Each write adds a `note` event to the audit log (actor
+`cli`, id and type only; never titles or content); if the audit log cannot be written you get a
+warning and the write still stands.
+
+Rules the writer enforces (the same code will serve Claude's proposals):
+
+- **Server-controlled fields.** A caller supplies content only; `id`, `date`, `origin`, `reviewed`,
+  initial status and the acceptance fields are set by the server and rejected if sent.
+- **Claude-created records** (not reachable yet) are `origin: claude`, `reviewed: false`; a decision
+  starts `proposed` (never `active`) and needs at least one `evidence` entry; bodies are capped at
+  8,000 characters; a project may hold at most 20 unreviewed records (my estimate for the default).
+- **References must exist** with the right type (`related_tasks`, `related_decisions`,
+  `assumptions`, `constraints`); a decision needs at least one reason.
+- **Supersession** needs an *active* decision of the same project that is not already being
+  replaced. A decision that supersedes another starts `proposed`; completing it (the CLI does so
+  immediately) activates it and marks the predecessor `superseded` in this order: successor first,
+  then predecessor. A crash in between leaves a one-sided link that the reader tolerates and
+  `aios doctor` reports; `aios decision repair` (or running the step again) finishes it. A
+  successor that is `rejected` or `superseded` cannot be revived.
+- **Tasks** move only along allowed transitions (for example `done` can only be reopened).
+- **Existing files** are edited only for `status`, `superseded_by`, `reviewed`, `accepted_by` and
+  `accepted_digest`, by replacing that one value: comments, quoting, trailing comments, CRLF line
+  endings and a BOM are preserved, and the result is re-validated before it is written. Files with
+  an unusual shape (duplicate keys, multi-line values, mixed line endings, invalid UTF-8) are refused
+  with a message and left untouched.
+- **Files are written atomically** (temporary file, then replace; retried when Windows briefly locks
+  the target), under a lock file in the git-ignored `.index/` directory, so ids stay unique across
+  threads and processes.
+- **Never edited:** a record's title, reasons, alternatives and body after creation (not exposed).
+
+New optional fields (all backward compatible; old files stay valid): `origin`, `reviewed`,
+`evidence` (what a claim rests on), `accepted_by`, `accepted_digest`. Text fields reject NUL and
+other control characters, and bodies are stored with LF endings and no outer blank lines.
+
 ## Decision lifecycle
 
 `DEC-0001 (superseded) <-- supersedes -- DEC-0002 (active)`. Nothing is deleted. The reader
@@ -67,9 +116,11 @@ reasons and the `reason_for_change` of each replacement, and the current decisio
 `superseded_by_missing`, `supersedes_missing`, `not_reciprocal` (warning),
 `predecessor_not_superseded` (warning), `bad_supersession_target`, `multiple_successors`,
 `supersession_cycle`, `dangling_reference` (warning), `unknown_project` (warning, needs the registry),
-plus file problems: `invalid_record`, `location_mismatch`, `duplicate_id`, `file_too_large`,
-`unexpected_file` (warning), `bad_project_dir`. One bad file is skipped and reported; it never stops
-the index or the other records.
+`unreviewed_active` (an unreviewed decision marked active), `reviewed_without_acceptance` (warning),
+`review_backlog` (warning at 20 unreviewed), plus file problems: `invalid_record`,
+`location_mismatch`, `duplicate_id`, `file_too_large`, `unexpected_file` (warning),
+`bad_project_dir`. One bad file is skipped and reported; it never stops the index or the other
+records.
 
 ## Search (layered, cheapest first)
 
@@ -103,7 +154,8 @@ before it reaches FTS5.
 
 - **Change detection is by path, size and mtime.** An edit that keeps both size and mtime
   identical is not noticed until `aios index rebuild`.
-- **Read path only** (see above). The immutability rule for active decisions is not enforced.
+- **Hand edits are not blocked.** The writer never edits reasoning, but nothing stops you editing a
+  file by hand; detecting that (via `accepted_digest`) is planned for 2d.
 - **Keyword search only**; no synonyms, no embeddings.
 - **YAML aliases are rejected** (a tiny file of nested aliases can expand enormously when walked);
   a 256 KiB file-size cap applies to every record.
@@ -117,13 +169,25 @@ before it reaches FTS5.
 
 ## Test evidence
 
-- 489 tests pass locally (Linux, Python 3.13). They cover record validation, parsing, scanning,
-  index lifecycle (corrupt, missing, old-schema, stale), layered search, filter validation,
-  hostile queries, listing, fetching, decision history (chains, one-sided links, cycles, missing
-  and multiple successors), every integrity check, and the CLI.
-- Manual mutation checks: 17 deliberate breakages (including FTS operators from user text,
-  skipped freshness checks, ignored project filters, symlink following, unsafe YAML, alias
-  expansion, a leftover temp file after a failed rebuild) each make the suite fail. **Two
-  initially survived** (symlink following, unsafe YAML) because my tests could not tell the
-  difference; they were rewritten. The alias-bomb gap was found separately, by probing a small
-  YAML file, and the guard and its test were added afterwards.
+Phase 1 (read path): 489 tests and 17 deliberate breakages, all caught (details in the Phase 1 commit
+history). Phase 2a adds about 265 tests (754 pass in total locally on Linux, 1 POSIX-skip):
+
+- writer: a hostile-string round-trip fuzz over every text field (YAML syntax, `---`, aliases,
+  tags, unicode, 400-character lines), path safety including symlinked directories, atomic-write
+  failure modes (failed replace, transient and permanent Windows-style locks, no temp litter),
+  id allocation cases isolated one rule at a time, and byte-level checks that edits change only the
+  intended lines (comments, quoting, CRLF, BOM preserved; unusual shapes refused);
+- service: creation rules for humans and for Claude, server-controlled fields, quota, references,
+  all supersession guards, idempotent completion, a simulated crash between the two steps, task
+  transitions, 8 threads and 3 processes creating at once, a held lock (timeout, then recovery),
+  failed writes consuming no id, and injection-style content that tries to smuggle in fields;
+- CLI: every command, bad input creating nothing, audit events with the `cli` actor and no content,
+  a warning (not a block) when the audit log is unwritable, and proof that nothing is committed to
+  a git data repository.
+
+19 deliberate breakages of the write path each make the suite fail. Two first survived because
+other checks masked them (the supersession status guard; id allocation over a `_rejected` folder);
+the tests were split so each rule is decided on its own, and the breakages are now caught. Writing
+the suite also exposed three real defects, since fixed: a rejected decision could have been revived
+by completing its supersession, the editor reported a block-style value with a generic parse error,
+and accepting a Claude proposal did not require recording who accepted it.

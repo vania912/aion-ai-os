@@ -49,16 +49,33 @@ TOOL_NAMES = (
     "get_decision_history",
 )
 OPERATIONS = (*TOOL_NAMES, "read_resource", "get_prompt")
+#: Operations the write tools (Phase 2c) will use. They are PROPOSE level: they can only create
+#: unreviewed memory records, never touch a project. Denied unless the server is started with
+#: ``--allow-propose``.
+PROPOSE_OPERATIONS = (
+    "propose_decision",
+    "propose_task",
+    "propose_memory_item",
+    "update_task_status",
+)
 
 
 class ServerContext:
-    def __init__(self, data_dir: Path, *, audit: AuditLog | None = None) -> None:
+    def __init__(
+        self, data_dir: Path, *, audit: AuditLog | None = None, allow_propose: bool = False
+    ) -> None:
         self.data_dir = data_dir
+        self.allow_propose = allow_propose
         self.audit = audit if audit is not None else AuditLog(data_dir, actor="mcp")
         self.memory = MemoryService(data_dir)
-        self.policy = OperationPolicy()  # only READ_ONLY is enabled
+        enabled = {PermissionLevel.READ_ONLY}
+        if allow_propose:
+            enabled.add(PermissionLevel.PROPOSE)  # opt-in: default deny stays the rule
+        self.policy = OperationPolicy(frozenset(enabled))
         for operation in OPERATIONS:
             self.policy.register(operation, PermissionLevel.READ_ONLY)
+        for operation in PROPOSE_OPERATIONS:
+            self.policy.register(operation, PermissionLevel.PROPOSE)
         self._lock = threading.Lock()
         self._registry: tuple[tuple[int, int], Registry] | None = None
         self._files: dict[tuple[str, str], FileService] = {}

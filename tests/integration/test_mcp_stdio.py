@@ -152,3 +152,17 @@ def test_unwritable_audit_log_stops_the_server_at_start(world: World) -> None:
     (world.data / "audit").write_text("this is a file, not a directory")
     failed = _start_failure(env_for(world.data))
     assert failed.returncode == 1 and failed.stdout == b"" and b"audit" in failed.stderr.lower()
+
+
+def test_the_allow_propose_flag_is_accepted_and_recorded(world: World) -> None:
+    async def count_tools() -> int:
+        params = StdioServerParameters(
+            command=SERVE[0], args=[*SERVE[1:], "--allow-propose"], env=env_for(world.data)
+        )
+        async with Client(params) as client:
+            return len((await client.list_tools()).tools)
+
+    assert asyncio.run(count_tools()) == 14  # no write tools exist yet
+    log = "".join(p.read_text(encoding="utf-8") for p in (world.data / "audit").glob("*.jsonl"))
+    start = json.loads(log.splitlines()[0])
+    assert start["op"] == "server_start" and start["args"]["allow_propose"] is True

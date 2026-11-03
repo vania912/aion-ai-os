@@ -277,6 +277,14 @@ class MemoryService:
                         )
             if r.type == "decision":
                 _check_decision(r, by_id, successors_of, err, warn)
+            if r.type == "decision" and r.status == "active" and not r.reviewed:
+                err(r, "unreviewed_active", "an unreviewed decision must not be active")
+            if r.origin == "claude" and r.reviewed and not r.accepted_by:
+                warn(
+                    r,
+                    "reviewed_without_acceptance",
+                    "origin is claude and reviewed is true, but nobody accepted it",
+                )
 
         for target_id, succ in sorted(successors_of.items()):
             if len(succ) > 1:
@@ -286,6 +294,15 @@ class MemoryService:
                     "multiple_successors",
                     f"{target_id} is replaced by several decisions: {', '.join(sorted(succ))}",
                 )
+
+        waiting: dict[str, int] = {}
+        for r in by_id.values():
+            if not r.reviewed:
+                waiting[r.project] = waiting.get(r.project, 0) + 1
+        for project, count in sorted(waiting.items()):
+            if count >= _BACKLOG_WARNING:
+                msg = f"{count} records are awaiting review (aios review list)"
+                issues.append(Issue(project, Severity.WARNING, "review_backlog", msg))
 
         reported: set[str] = set()
         for r in by_id.values():
@@ -322,6 +339,7 @@ class MemoryService:
             raise InvalidRequestError("tag must be lowercase letters, digits, '_' or '-'")
 
 
+_BACKLOG_WARNING = 20  # matches the default per-project quota of unreviewed records
 _REFERENCE_FIELDS = (
     ("related_tasks", "task"),
     ("related_decisions", "decision"),

@@ -54,6 +54,14 @@ restart.
 arguments on whitespace. An unknown project returns an explanatory message listing the valid ids
 (the SDK hides exception text for prompts).
 
+## Write access (not yet available)
+
+`aios serve --allow-propose` exists but currently changes nothing a client can see: it enables the
+PROPOSE permission level in the policy (default is read-only), records `allow_propose` in the
+`server_start` audit event, and leaves the tool list at 14. The propose tools themselves arrive in
+Phase 2c ([PHASE2-PLAN.md](PHASE2-PLAN.md)). Registering the server without the flag keeps it
+read-only.
+
 ## Safety design
 
 - **No write path.** There is no tool for editing files, committing, pushing, deleting or

@@ -17,15 +17,13 @@ import hashlib
 import json
 import os
 import re
-import sys
-import threading
-import time
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
+from aios.adapters.filelock import exclusive_lock
 from aios.domain.audit import AuditEvent, VerifyProblem, VerifyResult
 from aios.errors import AuditError
 
@@ -41,67 +39,9 @@ def event_hash(data: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-# Threads of one process queue here first, so only one of them competes for the OS lock.
-_PROCESS_LOCK = threading.Lock()
-_LOCK_POLL_S = 0.02
-
-
-def _try_os_lock(fd: int) -> bool:
-    """One non-blocking attempt at the exclusive OS lock; False if another process holds it."""
-    if sys.platform == "win32":
-        import msvcrt
-
-        try:
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-        except OSError:
-            return False
-        return True
-    import fcntl
-
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return False
-    return True
-
-
-def _os_unlock(fd: int) -> None:
-    if sys.platform == "win32":
-        import msvcrt
-
-        os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-    else:
-        import fcntl
-
-        fcntl.flock(fd, fcntl.LOCK_UN)
-
-
-@contextlib.contextmanager
-def _exclusive_lock(path: Path, timeout_s: float) -> Iterator[None]:
-    """Exclusive lock across threads and processes, with our own bounded wait.
-
-    The Windows ``LK_LOCK`` mode gives up after about 10 seconds and reports "Resource deadlock
-    avoided", which many queued writers can exceed on a slow disk; so we poll with ``LK_NBLCK``.
-    """
-    deadline = time.monotonic() + timeout_s
-    if not _PROCESS_LOCK.acquire(timeout=timeout_s):
-        raise AuditError(f"timed out after {timeout_s:g}s waiting for the audit lock")
-    try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            while not _try_os_lock(fd):
-                if time.monotonic() >= deadline:
-                    raise AuditError(f"timed out after {timeout_s:g}s waiting for the audit lock")
-                time.sleep(_LOCK_POLL_S)
-            try:
-                yield
-            finally:
-                _os_unlock(fd)
-        finally:
-            os.close(fd)
-    finally:
-        _PROCESS_LOCK.release()
+def _exclusive_lock(path: Path, timeout_s: float) -> contextlib.AbstractContextManager[None]:
+    """The audit lock (module-level so tests can hold it directly)."""
+    return exclusive_lock(path, timeout_s, "audit lock")
 
 
 def _parse(line: str) -> AuditEvent | None:

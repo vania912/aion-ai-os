@@ -579,3 +579,34 @@ def test_concurrent_queries_on_a_stale_index_do_not_collide(data: Path) -> None:
     for t in threads:
         t.join()
     assert errors == [] and len(set(results)) == 1 and results[0] > 0
+
+
+def test_review_invariants_are_checked(tmp_path: Path) -> None:
+    write_record(tmp_path, id="DEC-0001", origin="claude", reviewed=False)  # active but unreviewed
+    write_record(
+        tmp_path, id="DEC-0002", origin="claude", reviewed=True
+    )  # reviewed, nobody accepted
+    write_record(tmp_path, id="DEC-0003", origin="claude", reviewed=True, accepted_by="Vania")
+    write_record(tmp_path, id="DEC-0004", status="proposed", origin="claude", reviewed=False)
+    found = {(i.code, i.message.split(":")[0]) for i in MemoryService(tmp_path).check()}
+    assert ("unreviewed_active", "DEC-0001") in found
+    assert ("reviewed_without_acceptance", "DEC-0002") in found
+    assert not any(m in ("DEC-0003", "DEC-0004") for _, m in found)
+
+
+def test_a_review_backlog_is_reported_per_project(tmp_path: Path) -> None:
+    for i in range(20):
+        write_record(
+            tmp_path,
+            id=f"NOTE-{i + 1:04d}",
+            type="note",
+            project="pulse",
+            origin="claude",
+            reviewed=False,
+        )
+    write_record(
+        tmp_path, id="NOTE-0100", type="note", project="blueprint", origin="claude", reviewed=False
+    )
+    backlog = [i for i in MemoryService(tmp_path).check() if i.code == "review_backlog"]
+    assert [(i.project_id, i.severity.value) for i in backlog] == [("pulse", "warning")]
+    assert "20 records" in backlog[0].message

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import getpass
+import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,11 +18,12 @@ from aios.domain.audit import AuditEvent
 from aios.domain.git import ChangedFile
 from aios.domain.memory import MemoryHit
 from aios.domain.models import Issue, Registry, Severity
-from aios.errors import AiosError
+from aios.errors import AiosError, InvalidRequestError
 from aios.services.audit import AuditLog, audit_dir_exists
 from aios.services.files import FileService, build_file_service
 from aios.services.git import GitService, build_git_service
 from aios.services.memory import MemoryService, memory_dir_exists
+from aios.services.memory_write import CreateResult, MemoryWriter, NewRecord
 from aios.services.registry import check_registry, load_registry
 
 app = typer.Typer(
@@ -43,6 +46,8 @@ decision_app = typer.Typer(help="Decision records and their history.", no_args_i
 app.add_typer(decision_app, name="decision")
 audit_app = typer.Typer(help="The audit log of operations.", no_args_is_help=True)
 app.add_typer(audit_app, name="audit")
+task_app = typer.Typer(help="Tasks: add and change status.", no_args_is_help=True)
+app.add_typer(task_app, name="task")
 
 DataDirOption = Annotated[
     Path | None,
@@ -581,13 +586,198 @@ def audit_anchor(data_dir: DataDirOption = None) -> None:
 
 
 @app.command()
-def serve(data_dir: DataDirOption = None) -> None:
+def serve(
+    data_dir: DataDirOption = None,
+    allow_propose: Annotated[
+        bool,
+        typer.Option(
+            "--allow-propose",
+            help="Enable PROPOSE-level operations (Claude may create unreviewed records).",
+        ),
+    ] = False,
+) -> None:
     """Run the MCP server over stdio (Claude Code starts this; see docs/MCP.md)."""
     settings = _settings(data_dir)
     try:
         from aios.interfaces.mcp.server import serve as run_server
 
-        run_server(settings.data_dir)
+        run_server(settings.data_dir, allow_propose=allow_propose)
     except AiosError as exc:
         typer.echo(f"error: {exc}", err=True)  # stderr: stdout belongs to the protocol
         raise typer.Exit(code=1) from exc
+
+
+# -- writing memory (human CLI; reviewed records, never committed) --------------------------
+
+ListOpt = Annotated[list[str] | None, typer.Option()]
+MAX_BODY_FILE_BYTES = 256 * 1024
+
+
+def _whoami() -> str:
+    return os.environ.get("AIOS_USER", "").strip() or getpass.getuser()
+
+
+def _body(body: str | None, body_file: Path | None) -> str:
+    if body is not None and body_file is not None:
+        raise typer.BadParameter("use either --body or --body-file, not both")
+    if body_file is None:
+        return body or ""
+    with _cli_errors():
+        try:
+            if body_file.stat().st_size > MAX_BODY_FILE_BYTES:
+                raise InvalidRequestError(
+                    f"{body_file.name} is larger than {MAX_BODY_FILE_BYTES} bytes"
+                )
+            return body_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise InvalidRequestError(f"cannot read {body_file}: {exc}") from exc
+    return ""  # unreachable: _cli_errors exits
+
+
+def _audit_write(settings: Settings, op: str, project: str | None, args: dict[str, object]) -> None:
+    """Record a human CLI write. The write already happened, so a failure only warns."""
+    try:
+        AuditLog(settings.data_dir, actor="cli").note(op, project=project, args=args)
+    except AiosError as exc:
+        typer.echo(f"warning: the audit log could not be written: {exc}", err=True)
+
+
+def _created(settings: Settings, result: CreateResult, *, show_notes: bool = True) -> None:
+    r = result.record
+    _audit_write(settings, "create_record", r.project, {"id": r.id, "type": r.type})
+    typer.echo(f"created {r.id} [{r.status}] {result.path}")
+    for note in result.notes if show_notes else []:
+        typer.echo(f"note: {note}")
+    typer.echo("(written to disk only; commit your data repo when you are ready)", err=True)
+
+
+@decision_app.command("create")
+def decision_create(
+    project: str,
+    title: Annotated[str, typer.Option(help="One-line title.")],
+    why: Annotated[list[str], typer.Option(help="A reason. Repeat for several.")],
+    alternative: ListOpt = None,
+    made_by: ListOpt = None,
+    supersedes: Annotated[str | None, typer.Option(help="Decision id this replaces.")] = None,
+    reason_for_change: str | None = None,
+    tag: ListOpt = None,
+    related_file: ListOpt = None,
+    related_task: ListOpt = None,
+    related_decision: ListOpt = None,
+    assumption: ListOpt = None,
+    constraint: ListOpt = None,
+    evidence: ListOpt = None,
+    body: str | None = None,
+    body_file: Path | None = None,
+    data_dir: DataDirOption = None,
+) -> None:
+    """Record a decision (active and reviewed). With --supersedes, the old one is superseded."""
+    settings = _settings(data_dir)
+    text = _body(body, body_file)
+    me = _whoami()
+    with _cli_errors():
+        writer = MemoryWriter(settings.data_dir)
+        result = writer.create(
+            NewRecord(
+                type="decision", project=project, title=title, why=why, body=text,
+                alternatives_considered=alternative or [], made_by=made_by or [me],
+                supersedes=supersedes, reason_for_change=reason_for_change, tags=tag or [],
+                related_files=related_file or [], related_tasks=related_task or [],
+                related_decisions=related_decision or [], assumptions=assumption or [],
+                constraints=constraint or [], evidence=evidence or [],
+            )
+        )  # fmt: skip
+        _created(settings, result, show_notes=not supersedes)
+        if supersedes:
+            changes = writer.complete_supersession(result.record.id, accepted_by=me)
+            _audit_write(
+                settings, "complete_supersession", project,
+                {"id": result.record.id, "replaces": supersedes},
+            )  # fmt: skip
+            for change in changes:
+                typer.echo(f"updated {change}")
+
+
+@decision_app.command("repair")
+def decision_repair(record_id: str, data_dir: DataDirOption = None) -> None:
+    """Finish a half-applied supersession (safe to run again)."""
+    settings = _settings(data_dir)
+    with _cli_errors():
+        changes = MemoryWriter(settings.data_dir).complete_supersession(
+            record_id, accepted_by=_whoami()
+        )
+    if not changes:
+        typer.echo("nothing to do: the supersession is already complete")
+        return
+    _audit_write(settings, "complete_supersession", None, {"id": record_id.upper()})
+    for change in changes:
+        typer.echo(f"updated {change}")
+
+
+@task_app.command("add")
+def task_add(
+    project: str,
+    title: Annotated[str, typer.Option(help="One-line title.")],
+    tag: ListOpt = None,
+    related_decision: ListOpt = None,
+    related_file: ListOpt = None,
+    body: str | None = None,
+    body_file: Path | None = None,
+    data_dir: DataDirOption = None,
+) -> None:
+    """Add a task (open, reviewed)."""
+    settings = _settings(data_dir)
+    text = _body(body, body_file)
+    with _cli_errors():
+        result = MemoryWriter(settings.data_dir).create(
+            NewRecord(
+                type="task", project=project, title=title, body=text, tags=tag or [],
+                related_decisions=related_decision or [], related_files=related_file or [],
+            )
+        )  # fmt: skip
+        _created(settings, result)
+
+
+@task_app.command("status")
+def task_status(task_id: str, status: str, data_dir: DataDirOption = None) -> None:
+    """Move a task to a new status (open, in_progress, blocked, done, cancelled)."""
+    settings = _settings(data_dir)
+    with _cli_errors():
+        before = MemoryService(settings.data_dir).get(task_id).record
+        after = MemoryWriter(settings.data_dir).set_task_status(task_id, status)
+    if before.status != after.status:
+        _audit_write(
+            settings, "set_task_status", after.project,
+            {"id": after.id, "from": before.status, "to": after.status},
+        )  # fmt: skip
+    typer.echo(f"{after.id}: {before.status} -> {after.status}")
+
+
+@memory_app.command("add")
+def memory_add(
+    project: str,
+    type: Annotated[
+        Literal["assumption", "constraint", "question", "discovery", "note"],
+        typer.Option("--type", help="Kind of record."),
+    ],
+    title: Annotated[str, typer.Option(help="One-line title.")],
+    tag: ListOpt = None,
+    related_decision: ListOpt = None,
+    related_file: ListOpt = None,
+    evidence: ListOpt = None,
+    body: str | None = None,
+    body_file: Path | None = None,
+    data_dir: DataDirOption = None,
+) -> None:
+    """Add an assumption, constraint, question, discovery or note (reviewed)."""
+    settings = _settings(data_dir)
+    text = _body(body, body_file)
+    with _cli_errors():
+        result = MemoryWriter(settings.data_dir).create(
+            NewRecord(
+                type=type, project=project, title=title, body=text, tags=tag or [],
+                related_decisions=related_decision or [], related_files=related_file or [],
+                evidence=evidence or [],
+            )
+        )  # fmt: skip
+        _created(settings, result)

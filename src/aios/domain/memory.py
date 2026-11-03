@@ -54,6 +54,10 @@ VALID_STATUS: dict[str, frozenset[str]] = {
 #: Statuses meaning "no longer the current position" for decisions.
 INACTIVE_DECISION_STATUSES = frozenset({"superseded", "deprecated", "rejected"})
 
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_BAD_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")  # keeps \t \n \r
+MAX_EVIDENCE = 20
+MAX_EVIDENCE_CHARS = 300
 ID_RE = re.compile(r"^(DEC|ASM|CON|Q|DSC|TSK|NOTE)-(\d{4,})$")
 _TAG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 _DECISION_ONLY = (
@@ -90,6 +94,12 @@ class MemoryRecord(BaseModel):
     related_files: list[str] = Field(default_factory=list)
     related_tasks: list[str] = Field(default_factory=list)
     related_decisions: list[str] = Field(default_factory=list)
+    # provenance and review (Phase 2): defaults describe a hand-written, trusted record
+    origin: Literal["human", "claude"] = "human"
+    reviewed: bool = True
+    evidence: list[str] = Field(default_factory=list)
+    accepted_by: str | None = None
+    accepted_digest: str | None = None
     # decision-only
     made_by: list[str] = Field(default_factory=list)
     why: list[str] = Field(default_factory=list)
@@ -121,12 +131,67 @@ class MemoryRecord(BaseModel):
             raise ValueError(f"status {value!r} is not valid for {rtype} (use: {allowed})")
         return value
 
+    @field_validator("evidence")
+    @classmethod
+    def _evidence(cls, value: list[str]) -> list[str]:
+        if len(value) > MAX_EVIDENCE:
+            raise ValueError(f"at most {MAX_EVIDENCE} evidence entries")
+        for item in value:
+            if (
+                not 1 <= len(item.strip()) <= MAX_EVIDENCE_CHARS
+                or _BAD_CONTROL.search(item)
+                or "\n" in item
+            ):
+                raise ValueError(
+                    f"evidence entries must be single-line text, 1-{MAX_EVIDENCE_CHARS} chars"
+                )
+        return value
+
+    @field_validator("accepted_by")
+    @classmethod
+    def _accepted_by(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not 1 <= len(value.strip()) <= 80 or _BAD_CONTROL.search(value) or "\n" in value
+        ):
+            raise ValueError("accepted_by must be a single-line name of 1-80 characters")
+        return value
+
+    @field_validator("accepted_digest")
+    @classmethod
+    def _digest(cls, value: str | None) -> str | None:
+        if value is not None and not _DIGEST_RE.match(value):
+            raise ValueError("accepted_digest must be a 64-character lowercase hex SHA-256")
+        return value
+
+    @field_validator("made_by", "why", "alternatives_considered")
+    @classmethod
+    def _text_lists(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if _BAD_CONTROL.search(item):
+                raise ValueError("control characters are not allowed in text fields")
+        return value
+
+    @field_validator("reason_for_change", "body")
+    @classmethod
+    def _text(cls, value: str | None) -> str | None:
+        if value is not None and _BAD_CONTROL.search(value):
+            raise ValueError("control characters are not allowed in text fields")
+        return value
+
+    @field_validator("body")
+    @classmethod
+    def _normalise_body(cls, value: str) -> str:
+        """LF line endings and no outer blank lines, as the file format stores them."""
+        return value.replace("\r\n", "\n").strip("\n")
+
     @field_validator("title")
     @classmethod
     def _strip_title(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("title must not be blank")
+        if _BAD_CONTROL.search(value) or "\n" in value or "\r" in value:
+            raise ValueError("title must be a single line without control characters")
         return value
 
     @field_validator("tags")
