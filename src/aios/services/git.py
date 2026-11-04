@@ -33,8 +33,8 @@ from aios.policy.files import FileAccessPolicy, PathGuard
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 # Refs: no leading '-', no ':' (would allow 'rev:path' blob reads that bypass the file policy),
 # no whitespace/control characters, no range operators.
-_REF = re.compile(r"^[A-Za-z0-9_@][A-Za-z0-9._/@^~{}+-]{0,199}$")
-_SINCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .:+,/-]*$")
+_REF = re.compile(r"^[A-Za-z0-9_@][A-Za-z0-9._/@^~{}+-]{0,199}\Z")
+_SINCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .:+,/-]*\Z")
 _FS, _RS = "\x1f", "\x1e"
 _LOG_FORMAT = f"%H{_FS}%an{_FS}%aI{_FS}%s{_RS}"
 

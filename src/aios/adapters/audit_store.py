@@ -30,7 +30,7 @@ from aios.errors import AuditError
 AUDIT_DIRNAME = "audit"
 #: Windows opens files in text mode (LF -> CRLF on write) unless told otherwise; 0 elsewhere.
 _O_BINARY = getattr(os, "O_BINARY", 0)
-_MONTH_FILE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])\.jsonl$")
+_MONTH_FILE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])\.jsonl\Z")
 _TAIL_BYTES = 64 * 1024
 
 

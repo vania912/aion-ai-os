@@ -22,8 +22,8 @@ PROJECTS_DIRNAME = "projects"
 INDEX_DIRNAME = ".index"
 DEFAULT_MAX_FILE_BYTES = 256 * 1024
 _FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---[ \t]*(?:\n|\Z)(.*)\Z", re.DOTALL)
-_FILENAME_RE = re.compile(r"^([A-Z]+-\d+)\.md$")
-_PROJECT_DIR_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_FILENAME_RE = re.compile(r"^([A-Z]+-\d+)\.md\Z")
+_PROJECT_DIR_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 _DIR_TO_TYPE = {directory: rtype for rtype, directory in TYPE_DIR.items()}
 
 

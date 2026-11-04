@@ -42,9 +42,9 @@ from aios.domain.state import STATE_FILENAME, ProjectState
 from aios.errors import InvalidRequestError, MemoryStoreError, UnknownRecordError
 
 _ID_IN_TEXT = re.compile(r"\b(?:DEC|ASM|CON|Q|DSC|TSK|NOTE)-\d{4,}\b", re.IGNORECASE)
-_PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_STATUS_RE = re.compile(r"^[a-z_]{1,20}$")
-_TAG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+_PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
+_STATUS_RE = re.compile(r"^[a-z_]{1,20}\Z")
+_TAG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}\Z")
 
 
 class MemoryService:

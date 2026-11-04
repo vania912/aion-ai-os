@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from aios.domain.memory import ID_RE
 from aios.domain.models import ProjectId
 
-PLAN_ID_RE = re.compile(r"^PLAN-(\d{4,})$")
+PLAN_ID_RE = re.compile(r"^PLAN-(\d{4,})\Z")
 _BAD_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")  # keeps \t \n \r
 
 MAX_FILES = 50

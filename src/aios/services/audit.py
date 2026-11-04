@@ -29,11 +29,11 @@ from aios.policy.operations import OperationPolicy
 T = TypeVar("T")
 log = logging.getLogger("aios.audit")
 
-_OP_RE = re.compile(r"^[a-z][a-z0-9_.]{0,63}$")
-_PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_CALL_RE = re.compile(r"^[0-9a-f]{16}$")
-_ACTOR_RE = re.compile(r"^[a-z][a-z0-9_.:-]{0,39}$")
-_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,39}$")
+_OP_RE = re.compile(r"^[a-z][a-z0-9_.]{0,63}\Z")
+_PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
+_CALL_RE = re.compile(r"^[0-9a-f]{16}\Z")
+_ACTOR_RE = re.compile(r"^[a-z][a-z0-9_.:-]{0,39}\Z")
+_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,39}\Z")
 _OUTCOMES = ("ok", "error", "denied")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 

@@ -55,12 +55,12 @@ VALID_STATUS: dict[str, frozenset[str]] = {
 #: Statuses meaning "no longer the current position" for decisions.
 INACTIVE_DECISION_STATUSES = frozenset({"superseded", "deprecated", "rejected"})
 
-_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}\Z")
 _BAD_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")  # keeps \t \n \r
 MAX_EVIDENCE = 20
 MAX_EVIDENCE_CHARS = 300
-ID_RE = re.compile(r"^(DEC|ASM|CON|Q|DSC|TSK|NOTE)-(\d{4,})$")
-_TAG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+ID_RE = re.compile(r"^(DEC|ASM|CON|Q|DSC|TSK|NOTE)-(\d{4,})\Z")
+_TAG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}\Z")
 _DECISION_ONLY = (
     "made_by",
     "why",

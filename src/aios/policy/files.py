@@ -100,7 +100,7 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
 # Windows 8.3 short-name aliases (e.g. CREDEN~1.JSO) could bypass name patterns. Heuristic:
 # also rejects legitimate names such as "backup~1" (documented false positive).
-_SHORT_NAME_ALIAS = re.compile(r"^[^.~]{1,8}~\d+(\.[^.]{0,3})?$")
+_SHORT_NAME_ALIAS = re.compile(r"^[^.~]{1,8}~\d+(\.[^.]{0,3})?\Z")
 _RESERVED_DEVICE_NAMES = frozenset(
     {"con", "prn", "aux", "nul"}
     | {f"com{i}" for i in range(1, 10)}

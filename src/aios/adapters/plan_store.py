@@ -26,7 +26,7 @@ PLANS_DIRNAME = "plans"
 MAX_PLAN_BYTES = 128 * 1024
 MAX_EVENTS_BYTES = 512 * 1024
 _O_BINARY = getattr(os, "O_BINARY", 0)
-_NAME = re.compile(r"^(PLAN-\d{4,})\.(yaml|events\.jsonl)$")
+_NAME = re.compile(r"^(PLAN-\d{4,})\.(yaml|events\.jsonl)\Z")
 
 
 @dataclass(frozen=True)

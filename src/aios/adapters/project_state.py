@@ -12,7 +12,7 @@ from aios.adapters.memory_files import PROJECTS_DIRNAME, _NoAliasLoader
 from aios.domain.state import MAX_STATE_BYTES, STATE_FILENAME, ProjectState
 from aios.errors import MemoryStoreError
 
-_PROJECT_DIR_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_PROJECT_DIR_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 
 
 def state_path(data_dir: Path, project: str) -> Path | None:

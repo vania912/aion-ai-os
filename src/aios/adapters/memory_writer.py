@@ -33,7 +33,7 @@ EDITABLE_KEYS: frozenset[str] = frozenset(
     {"status", "superseded_by", "reviewed", "accepted_by", "accepted_digest", "rejection_reason"}
 )
 _FRONT = re.compile(r"\A---\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
-_PLAIN_VALUE = re.compile(r"^[A-Za-z0-9_-]+$")
+_PLAIN_VALUE = re.compile(r"^[A-Za-z0-9_-]+\Z")
 _VALUE = (
     r"(?P<value>\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\n]|'')*'|[^#\s][^#\n]*?|)"  # quoted, plain, or empty
 )
@@ -98,7 +98,7 @@ def allocate_id(data_dir: Path, record_type: str) -> str:
     """Next free id for a type, above every id ever used in the store (including rejected ones and
     files that failed to parse), so an id is never reused."""
     prefix = TYPE_PREFIX[record_type]
-    pattern = re.compile(rf"^{prefix}-(\d+)\.md$")
+    pattern = re.compile(rf"^{prefix}-(\d+)\.md\Z")
     highest = 0
     root = data_dir / PROJECTS_DIRNAME
     if root.is_dir():

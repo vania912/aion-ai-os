@@ -13,14 +13,17 @@ Safety measures (each covered by a test; see docs/GIT.md):
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from aios.errors import GitError
 
@@ -108,50 +111,103 @@ class GitRunner:
     ) -> GitOutput:
         self.validate(args)
         cap = max_bytes if max_bytes is not None else self._max_output_bytes
-        timed_out = threading.Event()
-        chunks: list[bytes] = []
-        total = 0
-        truncated = False
-        with tempfile.TemporaryFile() as err:
+        return run_process(
+            [*self._prefix, *args],
+            cwd=self._root,
+            env=self._env,
+            timeout_s=self._timeout_s,
+            cap=cap,
+            ok_codes=ok_codes,
+            label=args[0],
+            redact={str(self._root): "<root>"},
+        )
+
+
+def _new_group_kwargs() -> dict[str, Any]:
+    """Start git in its own process group so that a timeout can stop its children too."""
+    if os.name == "posix":
+        return {"start_new_session": True}
+    return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+
+
+def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill git and whatever it started (hooks, filters), which could hold the pipe open."""
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True, timeout=10, check=False,
+            )  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        pass
+    with contextlib.suppress(OSError):
+        proc.kill()
+
+
+def run_process(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_s: float,
+    cap: int,
+    ok_codes: Sequence[int] = (0,),
+    label: str,
+    redact: dict[str, str] | None = None,
+) -> GitOutput:
+    """Run a git command (argument list, no shell) with a timeout and an output cap."""
+    timed_out = threading.Event()
+    chunks: list[bytes] = []
+    total = 0
+    truncated = False
+    with tempfile.TemporaryFile() as err:
+        try:
             proc = subprocess.Popen(  # argument list, shell=False
-                [*self._prefix, *args],
-                cwd=self._root,
-                env=self._env,
+                list(argv),
+                cwd=cwd,
+                env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=err,
+                **_new_group_kwargs(),
             )
+        except OSError as exc:
+            raise GitError(f"cannot run git: {exc.strerror or exc}") from None
 
-            def _kill() -> None:
-                timed_out.set()
-                proc.kill()
+        def _kill() -> None:
+            timed_out.set()
+            _kill_tree(proc)
 
-            timer = threading.Timer(self._timeout_s, _kill)
-            timer.start()
-            try:
-                assert proc.stdout is not None
-                while True:
-                    chunk = proc.stdout.read(65536)
-                    if not chunk:
-                        break
-                    if total + len(chunk) > cap:
-                        chunks.append(chunk[: cap - total])
-                        truncated = True
-                        proc.kill()
-                        break
-                    chunks.append(chunk)
-                    total += len(chunk)
-            finally:
-                timer.cancel()
-                if proc.stdout is not None:
-                    proc.stdout.close()
-                proc.wait()
-            err.seek(0)
-            stderr_text = err.read().decode("utf-8", errors="replace")
-        if timed_out.is_set():
-            raise GitError(f"git timed out after {self._timeout_s:g}s")
-        if not truncated and proc.returncode not in ok_codes:
-            first = stderr_text.strip().splitlines()[:1]
-            detail = first[0].replace(str(self._root), "<root>") if first else "unknown error"
-            raise GitError(f"git {args[0]} failed: {detail}")
-        return GitOutput(b"".join(chunks), truncated, proc.returncode)
+        timer = threading.Timer(timeout_s, _kill)
+        timer.start()
+        try:
+            assert proc.stdout is not None
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                if total + len(chunk) > cap:
+                    chunks.append(chunk[: cap - total])
+                    truncated = True
+                    _kill_tree(proc)
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+        finally:
+            timer.cancel()
+            if proc.stdout is not None:
+                proc.stdout.close()
+            proc.wait()
+        err.seek(0)
+        stderr_text = err.read().decode("utf-8", errors="replace")
+    if timed_out.is_set():
+        raise GitError(f"git timed out after {timeout_s:g}s")
+    if not truncated and proc.returncode not in ok_codes:
+        first = stderr_text.strip().splitlines()[:1]
+        detail = first[0] if first else "unknown error"
+        for needle, replacement in (redact or {}).items():
+            detail = detail.replace(needle, replacement)
+        raise GitError(f"git {label} failed: {detail}")
+    return GitOutput(b"".join(chunks), truncated, proc.returncode)
