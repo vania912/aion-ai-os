@@ -29,6 +29,13 @@ def render_plan(view: PlanView, *, untrusted_note: bool = False) -> str:
         lines.append(f"revises: {p.revises}")
     if view.approval_stale:
         lines.append("APPROVAL STALE: it was approved, but the content changed afterwards")
+    if view.execution:
+        e = view.execution
+        lines.append(
+            f"EXECUTION started by {e.by} on {e.ts[:19]}: branch {e.branch}, base {e.base_commit[:12]}"
+            + (f" on {e.base_branch}" if e.base_branch else "")
+        )
+        lines.append(f"  worktree: {e.worktree}")
     if view.approval:
         a = view.approval
         lines.append(f"approved by {a.by} on {a.ts[:19]} (tier {a.tier}) - recorded, not enforced")

@@ -20,6 +20,9 @@ from aios.domain.memory import ID_RE
 from aios.domain.models import ProjectId
 
 PLAN_ID_RE = re.compile(r"^PLAN-(\d{4,})\Z")
+#: Branches aios creates for a plan, and full commit ids (40 hex, or 64 for sha256 repositories).
+BRANCH_RE = re.compile(r"^aios/PLAN-\d{4,}\Z")
+SHA_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?\Z")
 _BAD_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")  # keeps \t \n \r
 
 MAX_FILES = 50
@@ -28,9 +31,16 @@ FileAction = Literal["create", "modify", "delete"]
 Tier = Literal["R1", "R2", "R3"]
 Origin = Literal["human", "claude"]
 Status = Literal[
-    "proposed", "approved", "rejected", "executed", "partially_completed", "failed", "verified"
+    "proposed",
+    "approved",
+    "started",
+    "rejected",
+    "executed",
+    "partially_completed",
+    "failed",
+    "verified",
 ]
-EventKind = Literal["approved", "rejected", "outcome", "report", "verified"]
+EventKind = Literal["approved", "rejected", "started", "abandoned", "outcome", "report", "verified"]
 Outcome = Literal["executed", "partially_completed", "failed"]
 StepResult = Literal["pass", "fail", "not_run"]
 
@@ -202,6 +212,19 @@ class ApprovalInfo(BaseModel):
     actor: str
 
 
+class ExecutionInfo(BaseModel):
+    """Where an approved plan is being carried out (an isolated git worktree)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    branch: str
+    worktree: str
+    base_commit: str
+    base_branch: str | None
+    by: str
+    ts: str
+
+
 class ReportInfo(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -218,14 +241,42 @@ class Replay(BaseModel):
     status: Status
     approval: ApprovalInfo | None
     approval_stale: bool  # an approval exists for different content
+    execution: ExecutionInfo | None
     reports: list[ReportInfo]
     rejection_reason: str | None
     note: str | None
     anomalies: list[str]
 
 
+def _check_started(event: PlanEvent, plan_id: str | None) -> str | None:
+    data = event.data
+    branch, base, worktree = data.get("branch"), data.get("base_commit"), data.get("worktree")
+    if not isinstance(branch, str) or not BRANCH_RE.match(branch):
+        return "a start needs an aios/PLAN-nnnn branch"
+    if plan_id is not None and branch != f"aios/{plan_id}":
+        return f"the branch {branch} does not belong to {plan_id}"
+    if not isinstance(base, str) or not SHA_RE.match(base):
+        return "a start needs the full base commit id"
+    if not isinstance(worktree, str) or not 1 <= len(worktree) <= 1000:
+        return "a start needs the worktree path"
+    if _BAD_CONTROL.search(worktree):
+        return "the worktree path contains control characters"
+    base_branch = data.get("base_branch")
+    if base_branch is not None and (
+        not isinstance(base_branch, str)
+        or len(base_branch) > 200
+        or _BAD_CONTROL.search(base_branch)
+    ):
+        return "bad base branch name"
+    return None
+
+
 def check_event(
-    status: Status, event: PlanEvent, steps: int, reports: list[ReportInfo]
+    status: Status,
+    event: PlanEvent,
+    steps: int,
+    reports: list[ReportInfo],
+    plan_id: str | None = None,
 ) -> str | None:
     """Why ``event`` is not allowed in ``status`` (None if it is). The one rule set for both
     writing an event and replaying the file."""
@@ -234,14 +285,26 @@ def check_event(
         return f"{kind} after the plan is {status}"
     if kind == "approved":
         return None if status == "proposed" else f"cannot approve a plan that is {status}"
+    if kind == "started":
+        if status != "approved":
+            return f"only an approved plan can be started, not {status}"
+        return _check_started(event, plan_id)
+    if kind == "abandoned":
+        if status != "started":
+            return f"only a started plan can be abandoned, not {status}"
+        return None
     if kind == "rejected":
         if status in ("proposed", "approved"):
             return None
+        if status == "started":
+            return "abandon the worktree before rejecting the plan"
         return f"cannot reject a plan that is {status}"
     if kind == "outcome":
         value = event.data.get("outcome")
         if value not in ("executed", "partially_completed", "failed"):
             return "outcome must be executed, partially_completed or failed"
+        if status == "started":
+            return "a started plan gets its outcome from the seal (or abandon it first)"
         if status not in ("approved", "partially_completed"):
             return f"cannot record an outcome for a plan that is {status}"
         return None
@@ -271,12 +334,15 @@ def check_event(
     return None
 
 
-def replay(content: PlanContent, events: list[PlanEvent]) -> Replay:
+def replay(content: PlanContent, events: list[PlanEvent], plan_id: str | None = None) -> Replay:
     """Derive the plan's state from its events and its current content hash."""
     current = plan_hash(content)
+    if plan_id is None and isinstance(content, Plan):
+        plan_id = content.id
     steps = len(content.verification)
     status: Status = "proposed"
     approval: ApprovalInfo | None = None
+    execution: ExecutionInfo | None = None
     stale = False
     reports: list[ReportInfo] = []
     reason: str | None = None
@@ -289,7 +355,7 @@ def replay(content: PlanContent, events: list[PlanEvent]) -> Replay:
             else:
                 anomalies.append(f"event {event.seq} ({event.event}) is for different content")
             continue
-        problem = check_event(status, event, steps, reports)
+        problem = check_event(status, event, steps, reports, plan_id)
         if problem:
             anomalies.append(f"event {event.seq}: {problem}")
             continue
@@ -298,6 +364,18 @@ def replay(content: PlanContent, events: list[PlanEvent]) -> Replay:
             approval = ApprovalInfo(
                 by=event.by, ts=event.ts, tier=str(event.data.get("tier", "")), actor=event.actor
             )
+        elif event.event == "started":
+            status = "started"
+            execution = ExecutionInfo(
+                branch=event.data["branch"],
+                worktree=event.data["worktree"],
+                base_commit=event.data["base_commit"],
+                base_branch=event.data.get("base_branch"),
+                by=event.by,
+                ts=event.ts,
+            )
+        elif event.event == "abandoned":
+            status, execution = "approved", None
         elif event.event == "rejected":
             status, reason = "rejected", str(event.data.get("reason", ""))
         elif event.event == "outcome":
@@ -318,6 +396,7 @@ def replay(content: PlanContent, events: list[PlanEvent]) -> Replay:
         status=status,
         approval=approval,
         approval_stale=stale,
+        execution=execution,
         reports=reports,
         rejection_reason=reason,
         note=note,
@@ -338,6 +417,7 @@ class PlanView(BaseModel):
     approval: ApprovalInfo | None
     approval_stale: bool
     superseded_by: str | None
+    execution: ExecutionInfo | None = None
     reports: list[ReportInfo]
     rejection_reason: str | None
     note: str | None

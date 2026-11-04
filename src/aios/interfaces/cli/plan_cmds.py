@@ -22,6 +22,7 @@ from aios.config import Settings
 from aios.domain.models import Registry
 from aios.domain.plans import Outcome, PlanContent, StepReport
 from aios.errors import InvalidRequestError
+from aios.services.plan_execution import PlanExecutor
 from aios.services.plan_render import render_plan
 from aios.services.plans import PlanService
 
@@ -195,6 +196,116 @@ def register_plan_commands(app: typer.Typer, h: Helpers) -> None:
             with done(settings, "reject_plan", view.plan.id, view.plan.project, {}):
                 svc.reject(view.plan.id, by=_me(as_name), reason=reason)
         typer.echo(f"rejected {view.plan.id}")
+
+    def executor(data_dir: Path | None) -> tuple[Settings, PlanExecutor]:
+        settings = h.settings(data_dir)
+        registry = h.registry(data_dir)
+        plans = PlanService(settings.data_dir, registry=registry)
+        return settings, PlanExecutor(plans, registry, worktrees_dir=settings.worktrees_dir)
+
+    @plan_app.command("start")
+    def plan_start(
+        plan_id: str,
+        yes: YesOpt = False,
+        as_name: AsOpt = None,
+        data_dir: DataDirOption = None,
+    ) -> None:
+        """Create an isolated git worktree and branch for an approved plan, from the project's current commit."""
+        settings, ex = executor(data_dir)
+        with h.errors():
+            preview = ex.preview_start(plan_id)
+            p = preview.view.plan
+            if preview.already_started:
+                typer.echo(f"{p.id} is already started.")
+                typer.echo(f"  worktree: {preview.worktree}\n  branch:   {preview.branch}")
+                return
+            typer.echo(
+                f"{p.id}  {p.title}  (tier {preview.view.tier}, approved by {preview.view.approval.by if preview.view.approval else '?'})"
+            )
+            typer.echo(f"  project:   {p.project} at {preview.project_path}")
+            typer.echo(
+                f"  base:      {preview.base_commit[:12]} on {preview.base_branch or 'a detached HEAD'}"
+            )
+            typer.echo(f"  branch:    {preview.branch}")
+            typer.echo(
+                f"  worktree:  {preview.worktree}"
+                + ("  (left by an interrupted start: will be adopted)" if preview.adopt else "")
+            )
+            for warning in preview.warnings:
+                typer.echo(f"  warning: {warning}")
+            typer.echo(
+                "This writes branch and worktree data into the project's .git. Your working tree is not touched."
+            )
+            if not yes and not typer.confirm("Start?", default=False):
+                typer.echo("cancelled; nothing changed")
+                raise typer.Exit(code=1)
+            done_preview = ex.start(
+                preview.view.plan.id, by=_me(as_name), expected_base=preview.base_commit
+            )
+        h.audit(
+            settings,
+            "start_plan",
+            p.project,
+            {"id": p.id, "branch": preview.branch, "base": preview.base_commit[:12]},
+        )
+        typer.echo(f"started {p.id}. Work only inside:\n  {done_preview.worktree}")
+        typer.echo(
+            "Start Claude Code with that folder as its working directory. aios cannot stop edits made elsewhere."
+        )
+        typer.echo(
+            "(written to the project's .git only; commit nothing to your own branch yet)", err=True
+        )
+
+    @plan_app.command("abandon")
+    def plan_abandon(
+        plan_id: str,
+        keep_branch: Annotated[
+            bool,
+            typer.Option(
+                "--keep-branch",
+                help="Remove the worktree but keep the branch (and any commits on it).",
+            ),
+        ] = False,
+        yes: YesOpt = False,
+        as_name: AsOpt = None,
+        data_dir: DataDirOption = None,
+    ) -> None:
+        """Discard an execution: remove the plan's worktree and branch. Uncommitted work in the worktree is lost."""
+        settings, ex = executor(data_dir)
+        with h.errors():
+            preview = ex.preview_abandon(plan_id)
+            p = preview.view.plan
+            typer.echo(f"{p.id}  {p.title}  [{preview.view.status}]")
+            typer.echo(
+                f"  worktree: {preview.worktree}  ({'registered' if preview.worktree_registered else 'not registered'}, {'exists' if preview.worktree_dir_exists else 'missing'})"
+            )
+            typer.echo(
+                f"  branch:   {preview.branch}  ({'exists' if preview.branch_exists else 'absent'})"
+                + ("  -> kept" if keep_branch and preview.branch_exists else "")
+            )
+            if preview.changed:
+                typer.echo(f"  {len(preview.changed)} changed or ignored file(s) will be lost:")
+                for path in preview.changed[:20]:
+                    typer.echo(f"    {path}")
+                if len(preview.changed) > 20:
+                    typer.echo(f"    ... and {len(preview.changed) - 20} more")
+            if not yes and not typer.confirm("Discard it?", default=False):
+                typer.echo("cancelled; nothing changed")
+                raise typer.Exit(code=1)
+            result = ex.abandon(p.id, by=_me(as_name), keep_branch=keep_branch)
+        h.audit(
+            settings,
+            "abandon_plan",
+            p.project,
+            {
+                "id": p.id,
+                "worktree_removed": result.worktree_removed,
+                "branch_deleted": result.branch_deleted,
+            },
+        )
+        typer.echo(
+            f"abandoned {p.id}: worktree {'removed' if result.worktree_removed else 'not present'}, branch {'deleted' if result.branch_deleted else 'kept or absent'}."
+        )
 
     @plan_app.command("outcome")
     def plan_outcome(

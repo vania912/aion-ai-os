@@ -38,10 +38,9 @@ from pathlib import Path
 
 from aios.adapters.git_cli import GitOutput, run_process
 from aios.domain.gitwrite import Change, WorktreeChanges, WorktreeInfo
+from aios.domain.plans import BRANCH_RE, SHA_RE
 from aios.errors import GitError
 
-BRANCH_RE = re.compile(r"^aios/PLAN-\d{4,}\Z")
-SHA_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?\Z")
 _REV_BAD = re.compile(r"[\s:\x00-\x1f\x7f~^?*\[\\]|\.\.|@\{")
 _FILTER_KEY = re.compile(
     r"^filter\.(.+)\.(smudge|clean|process|required)\Z", re.IGNORECASE | re.DOTALL
@@ -154,6 +153,7 @@ class GitWriteRunner:
         argv = [
             self._exe,
             "--no-pager",
+            "--no-optional-locks",
             *self._static_config(),
             *self._filter_overrides(cwd),
             *args,
@@ -252,9 +252,47 @@ class GitWriteRunner:
         info = self._registered(path)
         self._git(["worktree", "remove", "--force", "--", info.path], cwd=self._root)
 
+    def worktree_prune(self) -> None:
+        """Forget worktrees whose directory is gone (git's own bookkeeping; deletes no files)."""
+        self._git(["worktree", "prune"], cwd=self._root)
+
     def branch_delete(self, branch: str) -> None:
         self._check_branch(branch)
         self._git(["branch", "-D", "--", branch], cwd=self._root)
+
+    def current_branch(self) -> str | None:
+        """The checked-out branch of the project's main working tree (None if detached)."""
+        out = self._git(["symbolic-ref", "--short", "-q", "HEAD"], cwd=self._root, ok_codes=(0, 1))
+        name = out.stdout.decode("utf-8", errors="replace").strip()
+        return name if out.returncode == 0 and name else None
+
+    def dirty_paths(self) -> list[str]:
+        """Paths with uncommitted changes (or untracked) in the project's main working tree."""
+        out = self._git(
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            cwd=self._root,
+            cap=self._max_diff_bytes,
+        )
+        entries = out.stdout.split(b"\x00")
+        paths: list[str] = []
+        i = 0
+        while i < len(entries):
+            entry = entries[i]
+            i += 1
+            if len(entry) < 4:
+                continue
+            paths.append(_decode(entry[3:]))
+            if entry[:1] in (b"R", b"C"):  # a rename lists the old path as the next field
+                i += 1
+        return sorted(paths)
+
+    def branches(self) -> list[str]:
+        """Local branches named like aios plan branches."""
+        out = self._git(
+            ["for-each-ref", "--format=%(refname:short)", "refs/heads/aios/"], cwd=self._root
+        )
+        names = out.stdout.decode("utf-8", errors="replace").split("\n")
+        return sorted(n.strip() for n in names if BRANCH_RE.match(n.strip()))
 
     def branch_exists(self, branch: str) -> bool:
         self._check_branch(branch)

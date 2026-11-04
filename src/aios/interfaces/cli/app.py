@@ -26,6 +26,7 @@ from aios.services.git import GitService, build_git_service
 from aios.services.memory import MemoryService, memory_dir_exists
 from aios.services.memory_review import MemoryReviewer
 from aios.services.memory_write import CreateResult, MemoryWriter, NewRecord
+from aios.services.plan_execution import PlanExecutor
 from aios.services.plans import PlanService
 from aios.services.registry import check_registry, load_registry
 
@@ -135,7 +136,9 @@ def doctor(data_dir: DataDirOption = None) -> None:
     issues = check_registry(registry)
     if memory_dir_exists(settings.data_dir):
         issues += MemoryService(settings.data_dir, registry=registry).check()
-    issues += PlanService(settings.data_dir, registry=registry).check()
+    plan_service = PlanService(settings.data_dir, registry=registry)
+    issues += plan_service.check()
+    issues += PlanExecutor(plan_service, registry, worktrees_dir=settings.worktrees_dir).check()
     if audit_dir_exists(settings.data_dir):
         audit = AuditLog(settings.data_dir, actor="cli").verify()
         for p in audit.problems:

@@ -47,6 +47,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "T20", "RUF"]
 "src/aios/interfaces/mcp/write_tools.py" = ["E501"]
 "tests/unit/test_plans.py" = ["E501"]
 "tests/unit/test_git_exec.py" = ["E501"]
+"tests/unit/test_plan_execution.py" = ["E501"]
 
 [tool.mypy]
 strict = true

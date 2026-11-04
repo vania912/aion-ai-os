@@ -8,9 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from aios.adapters.git_exec import BRANCH_RE, SHA_RE
 from aios.domain.memory import ID_RE
-from aios.domain.plans import PLAN_ID_RE
+from aios.domain.plans import BRANCH_RE, PLAN_ID_RE, SHA_RE
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 COMPILE = re.compile(r"re\.compile\(\s*r?f?\"((?:[^\"\\]|\\.)*)\"")

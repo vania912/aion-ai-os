@@ -10,6 +10,7 @@ from pathlib import Path
 from aios.errors import ConfigError
 
 ENV_DATA_DIR = "AIOS_DATA_DIR"
+ENV_WORKTREES_DIR = "AIOS_WORKTREES_DIR"
 REGISTRY_FILENAME = "registry.yaml"
 
 
@@ -18,6 +19,8 @@ class Settings:
     """Resolved settings. ``data_dir`` holds the registry and memory (kept outside this repo)."""
 
     data_dir: Path
+    #: Where plan worktrees are created (default: a sibling of each project, see PHASE4-PLAN D6).
+    worktrees_dir: Path | None = None
 
     @property
     def registry_file(self) -> Path:
@@ -39,6 +42,12 @@ def resolve_settings(
     resolved = chosen.expanduser()
     if not resolved.is_dir():
         raise ConfigError(f"data directory does not exist or is not a directory: {resolved}")
+    worktrees = environ.get(ENV_WORKTREES_DIR, "").strip()
+    if worktrees:
+        wt_path = Path(worktrees).expanduser()
+        if not wt_path.is_absolute():
+            raise ConfigError(f"{ENV_WORKTREES_DIR} must be an absolute path")
+        return Settings(data_dir=resolved, worktrees_dir=wt_path)
     return Settings(data_dir=resolved)
 
 

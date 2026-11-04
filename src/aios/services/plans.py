@@ -105,7 +105,7 @@ class PlanService:
             views[plan_id] = PlanView(
                 plan=plan, plan_hash=plan_hash(plan), status=state.status, tier=tier,
                 tier_reasons=reasons, approval=state.approval,
-                approval_stale=state.approval_stale, superseded_by=None,
+                approval_stale=state.approval_stale, superseded_by=None, execution=state.execution,
                 reports=state.reports, rejection_reason=state.rejection_reason,
                 note=state.note, anomalies=[*problems, *state.anomalies],
             )  # fmt: skip
@@ -148,7 +148,7 @@ class PlanService:
     # -- creating ------------------------------------------------------------------------
 
     def create(self, content: PlanContent, *, origin: Origin = "human") -> PlanView:
-        with self._lock():
+        with self.lock():
             views, _ = self._views()
             self._validate_references(content, views)
             if origin == "claude":
@@ -260,35 +260,47 @@ class PlanService:
     def _append(
         self, plan_id: str, kind: str, actor: str, by: str, data: Mapping[str, object]
     ) -> None:
+        with self.lock():
+            self.append_locked(plan_id, kind, actor, by, data)
+
+    def append_locked(
+        self, plan_id: str, kind: str, actor: str, by: str, data: Mapping[str, object]
+    ) -> None:
+        """Validate and append one event. The caller holds :meth:`lock`."""
         by = by.strip()
         if not by or len(by) > 100:
             raise InvalidRequestError("who is acting must be 1-100 characters")
-        with self._lock():
-            views, _ = self._views()
-            view = views.get(plan_id)
-            if view is None:
-                raise UnknownRecordError(f"no plan with id {plan_id}")
-            if view.anomalies:
-                raise InvalidRequestError(
-                    f"{plan_id}'s event file has problems ({view.anomalies[0]}); "
-                    "run `aios doctor` before changing it"
-                )
-            events = self._store.read_events(plan_id).events
-            event = PlanEvent.model_validate(
-                {
-                    "seq": len(events) + 1,
-                    "ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
-                    "event": kind,
-                    "actor": actor,
-                    "by": by,
-                    "plan_hash": view.plan_hash,
-                    "data": data,
-                }
+        views, _ = self._views()
+        view = views.get(plan_id)
+        if view is None:
+            raise UnknownRecordError(f"no plan with id {plan_id}")
+        if view.anomalies:
+            raise InvalidRequestError(
+                f"{plan_id}'s event file has problems ({view.anomalies[0]}); "
+                "run `aios doctor` before changing it"
             )
-            problem = check_event(view.status, event, len(view.plan.verification), view.reports)
-            if problem:
-                raise InvalidRequestError(f"{plan_id}: {problem}")
-            self._store.append_event(plan_id, event)
+        events = self._store.read_events(plan_id).events
+        event = PlanEvent.model_validate(
+            {
+                "seq": len(events) + 1,
+                "ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
+                "event": kind,
+                "actor": actor,
+                "by": by,
+                "plan_hash": view.plan_hash,
+                "data": data,
+            }
+        )
+        problem = check_event(
+            view.status, event, len(view.plan.verification), view.reports, view.plan.id
+        )
+        if problem:
+            raise InvalidRequestError(f"{plan_id}: {problem}")
+        self._store.append_event(plan_id, event)
+
+    def all_views(self) -> dict[str, PlanView]:
+        """Every readable plan with its derived state."""
+        return self._views()[0]
 
     # -- doctor --------------------------------------------------------------------------
 
@@ -336,7 +348,7 @@ class PlanService:
 
     # -- helpers -------------------------------------------------------------------------
 
-    def _lock(self) -> contextlib.AbstractContextManager[None]:
+    def lock(self) -> contextlib.AbstractContextManager[None]:
         cache = self._data_dir / INDEX_DIRNAME
         ensure_cache_dir(cache)
         return exclusive_lock(cache / "plans.lock", self._cfg.lock_timeout_s, "plan write lock")

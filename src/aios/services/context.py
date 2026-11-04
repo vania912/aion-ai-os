@@ -120,6 +120,8 @@ def _render_plans(ctx: ProjectContext) -> list[str]:
             mark = f"proposed, NOT approved, tier {p.tier}, {p.origin}"
         elif p.status == "approved":
             mark = f"approved (recorded), tier {p.tier}, no outcome yet"
+        elif p.status == "started":
+            mark = f"started in a worktree, tier {p.tier}, not yet sealed or verified"
         else:
             mark = f"{p.status}, tier {p.tier}"
         stale = ", APPROVAL STALE" if p.approval_stale else ""
