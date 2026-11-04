@@ -91,7 +91,7 @@ Claude Code prompts: whether each proposal asks for permission is your choice (d
 
 ### Plan tools (Phase 3)
 
-`list_plans` and `get_plan` are read-only and always present (16 read-only tools in total).
+`list_plans`, `get_plan` and `check_plan_scope` (compares a started plan's worktree with its file list; records nothing) are read-only and always present (16 read-only tools in total).
 `create_plan` and `record_verification` need `--allow-propose` (22 tools with the flag). There is no
 tool to approve, reject, verify or record an outcome. The prompt `/mcp__aios__prepare_change_plan
 <project>` walks the model through: read, draft, agree with you, `create_plan`, wait for approval.

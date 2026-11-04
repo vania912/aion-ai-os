@@ -46,7 +46,7 @@ proposed --approve--> approved --outcome--> executed ----verify----> verified
    |                     +--start--> started --abandon--> approved   (4b)
    +--reject--> rejected <+ (also from approved, before any outcome)
 ```
-`started` leaves only by `abandon` until the seal exists (step 4c).
+`started` leaves by `seal` (outcome computed from the worktree) or `abandon`; a partially completed or executed plan can be sealed again or abandoned.
 
 - Claude-written plans (`origin: claude`) always start `proposed`.
 - `verified` needs: an `executed` or `partially_completed` plan **and** a report in which every
@@ -84,6 +84,43 @@ branch and working tree are not touched; the project's `.git` gets the branch an
   `orphan_worktree`, `orphan_branch` and `plan_git_unavailable`.
 - No MCP tool can start or abandon a plan.
 
+## The seal: what actually changed (Phase 4c)
+
+After work in the worktree, `aios plan scope PLAN-0001` compares the worktree with the plan **without
+recording anything**; `aios plan seal` records the result. The outcome is computed by aios from git,
+never typed by a person or by Claude:
+
+| Result | When |
+|---|---|
+| `executed` | every planned file changed exactly as planned, and nothing else |
+| `partially_completed` | some planned files done, nothing blocking; seal again after more work |
+| `failed` (final) | anything blocking, or no planned file done |
+
+Blocking findings: a changed file the plan does not list (`out_of_scope`, with a note if it is a CI,
+deploy, dependency or secret-like path or differs only in letter case), the wrong action
+(`wrong_action`: planned *modify*, found *created*), a type change, a symlink, a nested repository or
+submodule, a file-mode change, any **git-ignored file** present (a fresh worktree has none, so it is
+new, and the diff cannot show it), and unusual file names (control characters, invalid UTF-8).
+Binary files are a note. The comparison is by path and action: it does not read inside files, so a
+planned file can still hold an unplanned edit. **You read the diff**: `aios plan diff PLAN-0001`
+prints it with terminal control characters and bidirectional overrides shown as `<U+xxxx>` so a
+diff cannot hide lines from you.
+
+- `seal` shows the findings first and asks. If the result is `failed` it warns that this is final and
+  defaults to *no*: clean the worktree up and run `scope` again. Typical case: running the tests
+  leaves an untracked `__pycache__/`, which is out of scope.
+- The seal is bound to the diff you were shown (SHA-256); if the worktree changed in between,
+  nothing is recorded. A seal needs at least one change in the worktree.
+- `aios plan verify` for a worktree plan requires the worktree to be **exactly as sealed**; if it
+  changed since, seal again. `aios doctor` reports `plan_seal_changed`.
+- A plan executed in a worktree cannot be given a manual `outcome`. `abandon` now also works from
+  `partially_completed` and `executed` (back to `approved`, after listing what is lost); for a
+  `failed` plan it only cleans up the worktree and branch and leaves the plan `failed`.
+- A plan that lists no files cannot be started (nothing to execute); record its outcome by hand.
+- MCP: `check_plan_scope` (read-only, always available) lets Claude run the same comparison to see
+  what the outcome would be, before telling you the work is done. It records and changes nothing; there
+  is no tool to seal.
+
 ## Who can do what
 
 | Action | Person (CLI) | Claude (MCP) |
@@ -94,6 +131,7 @@ branch and working tree are not touched; the project's `.git` gets the branch an
 | record outcome (executed/partial/failed) | `aios plan outcome` | **no** |
 | file a verification report | `aios plan report` | `record_verification` (a claim) |
 | mark verified | `aios plan verify` | **no** |
+| start / abandon / seal an execution | `aios plan start/abandon/seal` | **no** (only the read-only `check_plan_scope`) |
 
 Approving shows the whole plan. R1/R2 ask for confirmation. **R3** requires typing the first 8
 characters of the hash (`--yes` alone is not enough; scripts add `--confirm <8 chars>`).

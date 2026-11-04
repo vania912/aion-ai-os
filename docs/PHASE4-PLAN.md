@@ -1,7 +1,7 @@
 # Phase 4 plan — controlled execution (decision needed: ADR-0006)
 
-Status: **D1-D5 decided by the user (2026-11-04); D6-D8 assumed (no objection raised). Steps 4a and 4b are
-implemented (sections 9, 10); 4c-4d not started.** Decisions are recorded in
+Status: **D1-D5 decided by the user (2026-11-04); D6-D8 assumed (no objection raised). Steps 4a to 4c are
+implemented (sections 9-11); 4d not started.** Decisions are recorded in
 [ADR-0011](adr/0011-phase4-execution-model.md). Date: 2026-11-04.
 Legend: **[V]** verified by an experiment in this session · **[J]** my judgement · **[U]** unverified.
 
@@ -191,3 +191,36 @@ approval stays valid, and a new `start` is allowed once the branch is gone.
 
 Not verified: Windows (CI); a real Claude Code session working inside a started worktree (step 4d);
 what happens to a worktree when the *project* directory is moved or renamed.
+
+## 11. Step 4c result (2026-11-04)
+
+Done: `domain/seal.py` (pure comparison of a worktree's changes with the plan's file list);
+`sealed` event and `SealInfo`; `aios plan scope | diff | seal`; the verify gate (worktree must equal
+what was sealed); `abandon` from `partially_completed` / `executed` / `failed`; `plan_seal_changed`
+doctor check; MCP `check_plan_scope` (read-only). See [PLANS.md](PLANS.md).
+
+Verification: 1,109 tests locally (1 POSIX-only skip); ruff, mypy and `mypy --platform win32` clean.
+`tests/unit/test_plan_seal.py` (47): the scope rules in isolation, event validation and replay, and
+real git cycles (executed, partial then executed, failed and final, git-ignored file, symlink / mode /
+nested repo, tampering after the seal, re-seal, verify gate, abandon after seal, failed-plan cleanup,
+forged seal events, diff with terminal escapes, finding paths that imitate aios lines), CLI prompts and
+audit without plan text, and the MCP check being read-only. Mutation checks: 21 deliberate breaks
+(blocking findings ignored, partial counted as executed, nothing-done counted partial, wrong action /
+nested repo / symlink / mode change / ignored files / unusual names tolerated, findings uncapped, seal
+from any state, manual outcome while executing, unchecked seal hash, seal not bound to the shown diff,
+empty seal, verify ignoring changes after the seal, terminal escapes passed through, file-less plans
+startable, doctor ignoring a changed seal, finding paths unquoted) each failed a test on the first run.
+
+Defects found by the tests:
+- `PlanExecutor.verify` held the plan lock and then called `PlanService.verify`, which takes the same
+  non-reentrant lock: a deadlock (caught by the older Phase 3 lifecycle tests, "timed out waiting for
+  the plan write lock"). Fixed by appending under the already-held lock.
+- An unplanned nested repository reported only `out_of_scope`, hiding that it was a nested repository;
+  symlink / nested-repo / mode / binary findings now apply to unplanned paths too.
+
+Design notes to challenge: a `failed` seal is final (D8a). The CLI warns and defaults to "no" so a
+stray cache directory does not end a plan by accident, and `scope` / `check_plan_scope` let the work be
+cleaned up first. If that still feels too harsh, the alternative is a non-final `failed`.
+
+Not verified: Windows (CI); a real Claude Code session producing the worktree changes (step 4d);
+case-insensitive file systems beyond the letter-case hint.
