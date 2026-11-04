@@ -106,6 +106,7 @@ class PlanService:
                 plan=plan, plan_hash=plan_hash(plan), status=state.status, tier=tier,
                 tier_reasons=reasons, approval=state.approval,
                 approval_stale=state.approval_stale, superseded_by=None, execution=state.execution,
+                seal=state.seal,
                 reports=state.reports, rejection_reason=state.rejection_reason,
                 note=state.note, anomalies=[*problems, *state.anomalies],
             )  # fmt: skip
@@ -292,7 +293,12 @@ class PlanService:
             }
         )
         problem = check_event(
-            view.status, event, len(view.plan.verification), view.reports, view.plan.id
+            view.status,
+            event,
+            len(view.plan.verification),
+            view.reports,
+            view.plan.id,
+            view.execution is not None,
         )
         if problem:
             raise InvalidRequestError(f"{plan_id}: {problem}")

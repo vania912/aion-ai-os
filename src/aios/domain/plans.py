@@ -40,7 +40,9 @@ Status = Literal[
     "failed",
     "verified",
 ]
-EventKind = Literal["approved", "rejected", "started", "abandoned", "outcome", "report", "verified"]
+EventKind = Literal[
+    "approved", "rejected", "started", "abandoned", "sealed", "outcome", "report", "verified"
+]
 Outcome = Literal["executed", "partially_completed", "failed"]
 StepResult = Literal["pass", "fail", "not_run"]
 
@@ -212,6 +214,36 @@ class ApprovalInfo(BaseModel):
     actor: str
 
 
+class Finding(BaseModel):
+    """One observation from comparing a worktree with its plan (see ``domain/seal.py``)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    message: str
+    path: str | None = None
+    blocking: bool = True
+
+
+class SealInfo(BaseModel):
+    """The latest seal: what the worktree looked like when someone recorded the outcome."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ts: str
+    by: str
+    outcome: str
+    diff_sha256: str
+    diff_bytes: int
+    head: str
+    planned_total: int
+    planned_done: int
+    changed: int
+    ignored: int
+    findings: list[Finding]
+    findings_truncated: bool
+
+
 class ExecutionInfo(BaseModel):
     """Where an approved plan is being carried out (an isolated git worktree)."""
 
@@ -242,6 +274,7 @@ class Replay(BaseModel):
     approval: ApprovalInfo | None
     approval_stale: bool  # an approval exists for different content
     execution: ExecutionInfo | None
+    seal: SealInfo | None
     reports: list[ReportInfo]
     rejection_reason: str | None
     note: str | None
@@ -271,12 +304,42 @@ def _check_started(event: PlanEvent, plan_id: str | None) -> str | None:
     return None
 
 
+def _count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _check_sealed(event: PlanEvent) -> str | None:
+    d = event.data
+    if d.get("outcome") not in ("executed", "partially_completed", "failed"):
+        return "a seal needs an outcome"
+    digest = d.get("diff_sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return "a seal needs a valid diff_sha256"
+    for key in ("head", "base_commit"):
+        value = d.get(key)
+        if not isinstance(value, str) or not SHA_RE.match(value):
+            return f"a seal needs the full {key} commit id"
+    for key in ("diff_bytes", "planned_total", "planned_done", "changed", "ignored"):
+        if not _count(d.get(key)):
+            return f"a seal needs a non-negative {key}"
+    findings = d.get("findings")
+    if not isinstance(findings, list) or len(findings) > 100:
+        return "a seal needs at most 100 findings"
+    for item in findings:
+        try:
+            Finding.model_validate(item)
+        except ValueError:
+            return "a seal has a malformed finding"
+    return None
+
+
 def check_event(
     status: Status,
     event: PlanEvent,
     steps: int,
     reports: list[ReportInfo],
     plan_id: str | None = None,
+    executing: bool = False,
 ) -> str | None:
     """Why ``event`` is not allowed in ``status`` (None if it is). The one rule set for both
     writing an event and replaying the file."""
@@ -289,9 +352,13 @@ def check_event(
         if status != "approved":
             return f"only an approved plan can be started, not {status}"
         return _check_started(event, plan_id)
+    if kind == "sealed":
+        if status not in ("started", "partially_completed", "executed") or not executing:
+            return f"only a plan being executed can be sealed, not {status}"
+        return _check_sealed(event)
     if kind == "abandoned":
-        if status != "started":
-            return f"only a started plan can be abandoned, not {status}"
+        if status not in ("started", "partially_completed", "executed"):
+            return f"only an executing plan can be abandoned, not {status}"
         return None
     if kind == "rejected":
         if status in ("proposed", "approved"):
@@ -303,8 +370,10 @@ def check_event(
         value = event.data.get("outcome")
         if value not in ("executed", "partially_completed", "failed"):
             return "outcome must be executed, partially_completed or failed"
-        if status == "started":
-            return "a started plan gets its outcome from the seal (or abandon it first)"
+        if status == "started" or executing:
+            return (
+                "a plan executed in a worktree gets its outcome from the seal (or abandon it first)"
+            )
         if status not in ("approved", "partially_completed"):
             return f"cannot record an outcome for a plan that is {status}"
         return None
@@ -343,6 +412,7 @@ def replay(content: PlanContent, events: list[PlanEvent], plan_id: str | None = 
     status: Status = "proposed"
     approval: ApprovalInfo | None = None
     execution: ExecutionInfo | None = None
+    seal: SealInfo | None = None
     stale = False
     reports: list[ReportInfo] = []
     reason: str | None = None
@@ -355,7 +425,7 @@ def replay(content: PlanContent, events: list[PlanEvent], plan_id: str | None = 
             else:
                 anomalies.append(f"event {event.seq} ({event.event}) is for different content")
             continue
-        problem = check_event(status, event, steps, reports, plan_id)
+        problem = check_event(status, event, steps, reports, plan_id, execution is not None)
         if problem:
             anomalies.append(f"event {event.seq}: {problem}")
             continue
@@ -374,8 +444,18 @@ def replay(content: PlanContent, events: list[PlanEvent], plan_id: str | None = 
                 by=event.by,
                 ts=event.ts,
             )
+        elif event.event == "sealed":
+            d = event.data
+            status = d["outcome"]
+            seal = SealInfo(
+                ts=event.ts, by=event.by, outcome=d["outcome"], diff_sha256=d["diff_sha256"],
+                diff_bytes=d["diff_bytes"], head=d["head"], planned_total=d["planned_total"],
+                planned_done=d["planned_done"], changed=d["changed"], ignored=d["ignored"],
+                findings=[Finding.model_validate(x) for x in d["findings"]],
+                findings_truncated=bool(d.get("findings_truncated", False)),
+            )  # fmt: skip
         elif event.event == "abandoned":
-            status, execution = "approved", None
+            status, execution, seal = "approved", None, None
         elif event.event == "rejected":
             status, reason = "rejected", str(event.data.get("reason", ""))
         elif event.event == "outcome":
@@ -397,6 +477,7 @@ def replay(content: PlanContent, events: list[PlanEvent], plan_id: str | None = 
         approval=approval,
         approval_stale=stale,
         execution=execution,
+        seal=seal,
         reports=reports,
         rejection_reason=reason,
         note=note,
@@ -418,6 +499,7 @@ class PlanView(BaseModel):
     approval_stale: bool
     superseded_by: str | None
     execution: ExecutionInfo | None = None
+    seal: SealInfo | None = None
     reports: list[ReportInfo]
     rejection_reason: str | None
     note: str | None

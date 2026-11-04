@@ -26,6 +26,7 @@ from aios.services.files import FileService
 from aios.services.git import GitService, build_git_service
 from aios.services.memory import MemoryService
 from aios.services.memory_write import MemoryWriter
+from aios.services.plan_execution import PlanExecutor
 from aios.services.plans import PlanService
 from aios.services.registry import load_registry
 
@@ -51,6 +52,7 @@ TOOL_NAMES = (
     "get_decision_history",
     "list_plans",
     "get_plan",
+    "check_plan_scope",
 )
 OPERATIONS = (*TOOL_NAMES, "read_resource", "get_prompt")
 #: Operations the write tools use. They are PROPOSE level: they can only create
@@ -91,6 +93,10 @@ class ServerContext:
     def plans(self) -> PlanService:
         """A plan service bound to the current registry (cheap: it holds no state)."""
         return PlanService(self.data_dir, registry=self.registry())
+
+    def executor(self) -> PlanExecutor:
+        """Plan execution helper (used only for the read-only scope check)."""
+        return PlanExecutor(self.plans(), self.registry())
 
     # -- registry and per-project services -----------------------------------------------
 

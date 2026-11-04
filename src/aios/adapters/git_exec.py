@@ -27,13 +27,14 @@ project code on purpose. Residual risk: git features not covered by the tests.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
 import shutil
 import tempfile
 import weakref
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from aios.adapters.git_cli import GitOutput, run_process
@@ -303,16 +304,10 @@ class GitWriteRunner:
         )
         return out.returncode == 0
 
-    def changes(self, worktree: Path, base_sha: str) -> WorktreeChanges:
-        """Everything that differs from ``base_sha`` in an aios worktree, plus a hash of the diff.
-
-        Untracked files are included by adding them *intent-to-add* to a temporary copy of the
-        index, so the worktree itself is left exactly as it was.
-        """
-        if not SHA_RE.match(base_sha):
-            raise GitError("the base must be a full commit id")
-        info = self._registered(worktree)
-        cwd = Path(info.path)
+    @contextlib.contextmanager
+    def _intent_to_add_index(self, cwd: Path) -> Iterator[Path]:
+        """A temporary copy of the worktree's index with every untracked, non-ignored file added
+        intent-to-add. The worktree's own index is never written."""
         index_out = self._git(["rev-parse", "--git-path", "index"], cwd=cwd).stdout
         index_path = Path(index_out.decode("utf-8", errors="replace").strip())
         if not index_path.is_absolute():
@@ -326,26 +321,63 @@ class GitWriteRunner:
             else:
                 tmp_index.unlink()  # let git create it
             self._git(["add", "--intent-to-add", "--all", "--", "."], cwd=cwd, index_file=tmp_index)
-            common = ["--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"]
+            yield tmp_index
+        finally:
+            tmp_index.unlink(missing_ok=True)
+
+    def worktree_head(self, worktree: Path) -> str:
+        """The commit a registered aios worktree currently has checked out."""
+        info = self._registered(worktree)
+        out = self._git(["rev-parse", "--verify", "HEAD"], cwd=Path(info.path))
+        sha = out.stdout.decode("ascii", errors="replace").strip()
+        if not SHA_RE.match(sha):
+            raise GitError("could not read the worktree's HEAD")
+        return sha
+
+    def diff_text(
+        self, worktree: Path, base_sha: str, *, max_bytes: int = 1_000_000
+    ) -> tuple[bytes, bool]:
+        """The textual diff of everything changed since ``base_sha`` (capped), and whether it was
+        cut. Binary files appear as git's 'Binary files differ' line."""
+        if not SHA_RE.match(base_sha):
+            raise GitError("the base must be a full commit id")
+        cwd = Path(self._registered(worktree).path)
+        common = ["--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"]
+        with self._intent_to_add_index(cwd) as index:
+            out = self._git(
+                ["diff", "--src-prefix=a/", "--dst-prefix=b/", *common, base_sha],
+                cwd=cwd, index_file=index, cap=max_bytes,
+            )  # fmt: skip
+        return out.stdout, out.truncated
+
+    def changes(self, worktree: Path, base_sha: str) -> WorktreeChanges:
+        """Everything that differs from ``base_sha`` in an aios worktree, plus a hash of the diff.
+
+        Untracked files are included by adding them *intent-to-add* to a temporary copy of the
+        index, so the worktree itself is left exactly as it was.
+        """
+        if not SHA_RE.match(base_sha):
+            raise GitError("the base must be a full commit id")
+        cwd = Path(self._registered(worktree).path)
+        common = ["--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"]
+        cap = self._max_diff_bytes
+        with self._intent_to_add_index(cwd) as index:
             raw = self._git(
                 ["diff", "--raw", "-z", "--full-index", *common, base_sha],
-                cwd=cwd, index_file=tmp_index, cap=self._max_diff_bytes,
+                cwd=cwd, index_file=index, cap=cap,
             )  # fmt: skip
             numstat = self._git(
-                ["diff", "--numstat", "-z", *common, base_sha],
-                cwd=cwd, index_file=tmp_index, cap=self._max_diff_bytes,
-            )  # fmt: skip
+                ["diff", "--numstat", "-z", *common, base_sha], cwd=cwd, index_file=index, cap=cap
+            )
             patch = self._git(
                 ["diff", "--binary", "--full-index", "--src-prefix=a/", "--dst-prefix=b/",
                  *common, base_sha],
-                cwd=cwd, index_file=tmp_index, cap=self._max_diff_bytes,
+                cwd=cwd, index_file=index, cap=cap,
             )  # fmt: skip
             ignored = self._git(
                 ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"],
-                cwd=cwd, index_file=tmp_index, cap=self._max_diff_bytes,
+                cwd=cwd, index_file=index, cap=cap,
             )  # fmt: skip
-        finally:
-            tmp_index.unlink(missing_ok=True)
         if raw.truncated or numstat.truncated or patch.truncated or ignored.truncated:
             raise GitError(f"the change is larger than {self._max_diff_bytes} bytes")
         binary = _parse_numstat(numstat.stdout)

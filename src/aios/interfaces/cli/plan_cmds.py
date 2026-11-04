@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import getpass
+import json
 import os
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from aios.config import Settings
 from aios.domain.models import Registry
 from aios.domain.plans import Outcome, PlanContent, StepReport
 from aios.errors import InvalidRequestError
-from aios.services.plan_execution import PlanExecutor
+from aios.services.plan_execution import PlanExecutor, ScopePreview
 from aios.services.plan_render import render_plan
 from aios.services.plans import PlanService
 
@@ -67,6 +68,27 @@ def _read_plan_file(path: Path, project: str) -> PlanContent:
             f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
         )
         raise InvalidRequestError(f"invalid plan: {detail}") from exc
+
+
+def _print_scope(preview: ScopePreview) -> None:
+    sc, snap = preview.scope, preview.snapshot
+    typer.echo(
+        f"{preview.view.plan.id}: if sealed now -> {sc.outcome.upper()}  "
+        f"(planned files done {sc.planned_done}/{sc.planned_total}; {len(snap.changes)} changed, "
+        f"{len(snap.ignored)} git-ignored; diff {snap.diff_bytes} bytes)"
+    )
+    typer.echo(f"  diff sha256: {snap.diff_sha256}")
+    for f in sc.findings:
+        where = f" {json.dumps(f.path, ensure_ascii=True)}" if f.path else ""
+        typer.echo(f"  - [{'BLOCKING' if f.blocking else 'note'}] {f.code}{where}: {f.message}")
+    if sc.findings_truncated:
+        typer.echo("  - (more findings were not listed)")
+    if preview.nothing_changed:
+        typer.echo("  nothing has changed in the worktree yet")
+    if preview.matches_seal is True:
+        typer.echo("  the worktree matches the latest seal")
+    elif preview.matches_seal is False:
+        typer.echo("  the worktree has CHANGED since the latest seal")
 
 
 def register_plan_commands(app: typer.Typer, h: Helpers) -> None:
@@ -307,6 +329,76 @@ def register_plan_commands(app: typer.Typer, h: Helpers) -> None:
             f"abandoned {p.id}: worktree {'removed' if result.worktree_removed else 'not present'}, branch {'deleted' if result.branch_deleted else 'kept or absent'}."
         )
 
+    @plan_app.command("scope")
+    def plan_scope(plan_id: str, data_dir: DataDirOption = None) -> None:
+        """Compare the plan's worktree with the plan's file list. Records nothing. Exit 1 if it would fail."""
+        _, ex = executor(data_dir)
+        with h.errors():
+            preview = ex.preview_scope(plan_id)
+        _print_scope(preview)
+        if preview.scope.outcome == "failed":
+            raise typer.Exit(code=1)
+
+    @plan_app.command("diff")
+    def plan_diff(plan_id: str, data_dir: DataDirOption = None) -> None:
+        """Print the worktree's diff for review (terminal control characters are made visible)."""
+        _, ex = executor(data_dir)
+        with h.errors():
+            text, truncated = ex.diff_for_review(plan_id)
+        typer.echo(text, nl=not text.endswith("\n"))
+        if truncated:
+            typer.echo(
+                "[the diff was cut at 1,000,000 bytes; read the rest with git in the worktree]",
+                err=True,
+            )
+
+    @plan_app.command("seal")
+    def plan_seal(
+        plan_id: str,
+        yes: YesOpt = False,
+        as_name: AsOpt = None,
+        data_dir: DataDirOption = None,
+    ) -> None:
+        """Record the outcome of an execution, computed from what the worktree actually changed."""
+        settings, ex = executor(data_dir)
+        with h.errors():
+            preview = ex.preview_scope(plan_id)
+            _print_scope(preview)
+            if preview.view.status not in ("started", "partially_completed", "executed"):
+                raise InvalidRequestError(
+                    f"{preview.view.plan.id} is {preview.view.status}; it cannot be sealed"
+                )
+            outcome = preview.scope.outcome
+            if outcome == "failed":
+                typer.echo(
+                    "Sealing this marks the plan FAILED, which is final. Clean the worktree up and run `aios plan scope` again unless you mean it."
+                )
+            question = f"Record the outcome {outcome.upper()}?"
+            if not yes and not typer.confirm(question, default=outcome != "failed"):
+                typer.echo("cancelled; nothing changed")
+                raise typer.Exit(code=1)
+            sealed = ex.seal(
+                preview.view.plan.id,
+                by=_me(as_name),
+                expected_diff_sha256=preview.snapshot.diff_sha256,
+            )
+        h.audit(
+            settings,
+            "seal_plan",
+            sealed.view.plan.project,
+            {
+                "id": sealed.view.plan.id,
+                "outcome": sealed.scope.outcome,
+                "diff": sealed.snapshot.diff_sha256[:12],
+                "findings": len(sealed.scope.findings),
+            },
+        )
+        typer.echo(f"{sealed.view.plan.id} is now {sealed.view.status}")
+        if sealed.view.status in ("executed", "partially_completed"):
+            typer.echo(
+                "Next: read `aios plan diff`, have the checks reported, then `aios plan verify`."
+            )
+
     @plan_app.command("outcome")
     def plan_outcome(
         plan_id: str,
@@ -369,9 +461,9 @@ def register_plan_commands(app: typer.Typer, h: Helpers) -> None:
         data_dir: DataDirOption = None,
     ) -> None:
         """Mark a plan verified. Needs an executed/partial plan and a report in which every step passed."""
-        settings, svc = service(data_dir)
+        settings, ex = executor(data_dir)
         with h.errors():
-            view = svc.get(plan_id)
+            view = ex.plans.get(plan_id)
             typer.echo(render_plan(view, untrusted_note=True))
             if not yes and not typer.confirm(
                 "You have checked the evidence. Mark verified?", default=False
@@ -379,7 +471,7 @@ def register_plan_commands(app: typer.Typer, h: Helpers) -> None:
                 typer.echo("cancelled; nothing changed")
                 raise typer.Exit(code=1)
             with done(settings, "verify_plan", view.plan.id, view.plan.project, {}):
-                after = svc.verify(view.plan.id, by=_me(as_name), note=note)
+                after = ex.verify(view.plan.id, by=_me(as_name), note=note)
         typer.echo(f"{after.plan.id} is now {after.status}")
 
     @plan_app.command("check")

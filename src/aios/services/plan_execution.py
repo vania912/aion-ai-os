@@ -14,15 +14,19 @@ not know as an aios worktree).
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 from aios.adapters.git_exec import GitWriteRunner
+from aios.domain.gitwrite import WorktreeChanges
 from aios.domain.models import Issue, Registry, Severity
-from aios.domain.plans import PlanView
+from aios.domain.plans import PlanFile, PlanView
+from aios.domain.seal import ScopeResult, evaluate_scope
 from aios.errors import GitError, InvalidRequestError
+from aios.policy.plans import classify
 from aios.services.plans import PlanService
 
 RunnerFactory = Callable[[Path], GitWriteRunner]
@@ -56,10 +60,33 @@ class AbandonPreview:
 
 
 @dataclass(frozen=True)
+class ScopePreview:
+    view: PlanView
+    scope: ScopeResult
+    snapshot: WorktreeChanges
+    head: str
+    #: Whether the worktree still matches the latest seal (None if there is no seal).
+    matches_seal: bool | None
+
+    @property
+    def nothing_changed(self) -> bool:
+        return not self.snapshot.changes and not self.snapshot.ignored
+
+
+@dataclass(frozen=True)
 class AbandonResult:
     worktree_removed: bool
     branch_deleted: bool
     event_recorded: bool
+
+
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+
+
+def neutralise_terminal(text: str) -> str:
+    """Replace control characters (terminal escapes, bidirectional overrides) with visible
+    ``<U+xxxx>`` markers. Newlines and tabs stay."""
+    return _CONTROL.sub(lambda m: f"<U+{ord(m.group()):04X}>", text)
 
 
 def _same(a: str | Path, b: str | Path) -> bool:
@@ -78,6 +105,7 @@ class PlanExecutor:
         today: date | None = None,
     ) -> None:
         self._plans = plans
+        self.plans = plans
         self._registry = registry
         self._worktrees_dir = worktrees_dir
         self._factory = runner_factory
@@ -126,6 +154,11 @@ class PlanExecutor:
         if view.superseded_by:
             raise InvalidRequestError(
                 f"{plan.id} is replaced by {view.superseded_by}; start that plan instead"
+            )
+        if not plan.files:
+            raise InvalidRequestError(
+                f"{plan.id} lists no files, so there is nothing to execute in a worktree; "
+                "record its outcome with `aios plan outcome`"
             )
         runner, project_path = self._runner(plan.project)
         try:
@@ -219,12 +252,105 @@ class PlanExecutor:
                 ) from exc
         return preview
 
+    # -- scope check and seal ----------------------------------------------------------------
+
+    def _evaluate(self, view: PlanView) -> tuple[ScopeResult, WorktreeChanges, str]:
+        ex = view.execution
+        if ex is None:
+            raise InvalidRequestError(f"{view.plan.id} is not being executed in a worktree")
+        runner, _ = self._runner(view.plan.project)
+        worktree = Path(ex.worktree)
+        if not worktree.is_dir():
+            raise InvalidRequestError(f"the worktree {worktree} is missing; see `aios doctor`")
+        snapshot = runner.changes(worktree, ex.base_commit)
+        head = runner.worktree_head(worktree)
+
+        def risky(path: str) -> bool:
+            tier, _ = classify([PlanFile(path=path, action="modify")])
+            return tier == "R3"
+
+        scope = evaluate_scope(view.plan.files, snapshot.changes, snapshot.ignored, is_risky=risky)
+        return scope, snapshot, head
+
+    def preview_scope(self, plan_id: str) -> ScopePreview:
+        """Compare the worktree with the plan *without recording anything*."""
+        view = self._plans.get(plan_id)
+        if view.status not in ("started", "partially_completed", "executed", "failed"):
+            raise InvalidRequestError(
+                f"{view.plan.id} is {view.status}; there is no execution to check"
+            )
+        scope, snapshot, head = self._evaluate(view)
+        matches = None if view.seal is None else view.seal.diff_sha256 == snapshot.diff_sha256
+        return ScopePreview(view, scope, snapshot, head, matches)
+
+    def seal(self, plan_id: str, *, by: str, expected_diff_sha256: str) -> ScopePreview:
+        """Record the outcome of an execution from the worktree's actual changes.
+
+        ``expected_diff_sha256`` is the diff the person was shown; if the worktree changed since,
+        nothing is recorded. The outcome is computed here, never typed by anyone.
+        """
+        with self._plans.lock():
+            view = self._plans.get(plan_id)
+            if view.status not in ("started", "partially_completed", "executed"):
+                raise InvalidRequestError(
+                    f"{view.plan.id} is {view.status}; only a plan being executed can be sealed"
+                )
+            scope, snapshot, head = self._evaluate(view)
+            if snapshot.diff_sha256 != expected_diff_sha256:
+                raise InvalidRequestError(
+                    "the worktree changed since it was shown to you; check it again before sealing"
+                )
+            if not snapshot.changes and not snapshot.ignored:
+                raise InvalidRequestError("nothing has changed in the worktree yet")
+            assert view.execution is not None
+            data: dict[str, object] = {
+                "outcome": scope.outcome,
+                "diff_sha256": snapshot.diff_sha256,
+                "diff_bytes": snapshot.diff_bytes,
+                "head": head,
+                "base_commit": view.execution.base_commit,
+                "planned_total": scope.planned_total,
+                "planned_done": scope.planned_done,
+                "changed": len(snapshot.changes),
+                "ignored": len(snapshot.ignored),
+                "findings": [f.model_dump(mode="json", exclude_none=True) for f in scope.findings],
+                "findings_truncated": scope.findings_truncated,
+            }
+            self._plans.append_locked(view.plan.id, "sealed", "cli", by, data)
+        return ScopePreview(self._plans.get(plan_id), scope, snapshot, head, True)
+
+    def verify(self, plan_id: str, *, by: str, note: str = "") -> PlanView:
+        """Mark a plan verified. For a plan executed in a worktree, the worktree must still be
+        exactly what was sealed."""
+        with self._plans.lock():
+            view = self._plans.get(plan_id)
+            if view.execution is not None and view.seal is not None:
+                _, snapshot, _ = self._evaluate(view)
+                if snapshot.diff_sha256 != view.seal.diff_sha256:
+                    raise InvalidRequestError(
+                        "the worktree changed after it was sealed; seal it again before verifying"
+                    )
+            self._plans.append_locked(view.plan.id, "verified", "cli", by, {"note": note[:500]})
+        return self._plans.get(plan_id)
+
+    def diff_for_review(self, plan_id: str, *, max_bytes: int = 1_000_000) -> tuple[str, bool]:
+        """The worktree's diff as text for a person to read, with terminal control characters made
+        visible (a diff is untrusted: an escape sequence could hide lines from the reader)."""
+        view = self._plans.get(plan_id)
+        if view.execution is None:
+            raise InvalidRequestError(f"{view.plan.id} is not being executed in a worktree")
+        runner, _ = self._runner(view.plan.project)
+        raw, truncated = runner.diff_text(
+            Path(view.execution.worktree), view.execution.base_commit, max_bytes=max_bytes
+        )
+        return neutralise_terminal(raw.decode("utf-8", errors="replace")), truncated
+
     # -- abandon ----------------------------------------------------------------------------
 
     def preview_abandon(self, plan_id: str) -> AbandonPreview:
         view = self._plans.get(plan_id)
         plan = view.plan
-        if view.status not in ("started", "approved"):
+        if view.status not in ("started", "approved", "partially_completed", "executed", "failed"):
             raise InvalidRequestError(f"{plan.id} is {view.status}; there is nothing to abandon")
         branch = f"aios/{plan.id}"
         worktree = (
@@ -240,7 +366,7 @@ class PlanExecutor:
             raise InvalidRequestError(f"{plan.id} has no worktree or branch to abandon")
         changed: list[str] | None = None
         size = 0
-        if view.execution and registered and exists:
+        if view.execution and registered and exists:  # what would be lost
             snapshot = runner.changes(worktree, view.execution.base_commit)
             changed = [c.path for c in snapshot.changes] + snapshot.ignored
             size = snapshot.diff_bytes
@@ -268,7 +394,7 @@ class PlanExecutor:
                 runner.branch_delete(preview.branch)
                 deleted = True
             recorded = False
-            if preview.view.status == "started":
+            if preview.view.status in ("started", "partially_completed", "executed"):
                 data = {"worktree_removed": removed, "branch_deleted": deleted}
                 self._plans.append_locked(preview.view.plan.id, "abandoned", "cli", by, data)
                 recorded = True
@@ -323,7 +449,30 @@ class PlanExecutor:
             if age > self._stale_started_days:
                 add(Severity.WARNING, "plan_started_stale",
                     f"{view.plan.id} was started {age} days ago and has no outcome")  # fmt: skip
-        in_use = {v.plan.id for v in mine.values() if v.status == "started"}
+        for view in mine.values():
+            ex = view.execution
+            if (
+                view.seal is None
+                or ex is None
+                or view.status not in ("executed", "partially_completed")
+            ):
+                continue
+            if not Path(ex.worktree).is_dir():
+                add(Severity.WARNING, "plan_worktree_missing",
+                    f"{view.plan.id} is {view.status} but its worktree {ex.worktree} is gone")  # fmt: skip
+                continue
+            try:
+                now_sha = runner.changes(Path(ex.worktree), ex.base_commit).diff_sha256
+            except GitError:
+                continue
+            if now_sha != view.seal.diff_sha256:
+                add(Severity.WARNING, "plan_seal_changed",
+                    f"{view.plan.id}: the worktree changed after it was sealed; seal it again")  # fmt: skip
+        in_use = {
+            v.plan.id
+            for v in mine.values()
+            if v.status in ("started", "partially_completed", "executed")
+        }
         for info in registered:
             name = info.branch or ""
             plan_id = name.removeprefix("aios/")

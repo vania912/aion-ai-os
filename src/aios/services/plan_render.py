@@ -7,6 +7,8 @@ aios (status, hash, tier, approval, reports) and are the only authoritative ones
 
 from __future__ import annotations
 
+import json
+
 from aios.domain.plans import PlanView
 
 
@@ -67,6 +69,21 @@ def render_plan(view: PlanView, *, untrusted_note: bool = False) -> str:
     ):
         if related:
             lines.append(f"{label}: " + ", ".join(related))
+    if view.seal:
+        s = view.seal
+        lines += ["", f"SEAL (computed by aios from the worktree, {s.ts[:19]}, recorded by {s.by})"]
+        lines.append(
+            f"  outcome: {s.outcome}; planned files done {s.planned_done}/{s.planned_total}; "
+            f"{s.changed} changed, {s.ignored} git-ignored; diff {s.diff_bytes} bytes"
+        )
+        lines.append(f"  diff sha256: {s.diff_sha256}")
+        lines.append(f"  worktree head: {s.head}")
+        for f in s.findings:
+            where = f" {json.dumps(f.path, ensure_ascii=True)}" if f.path else ""
+            flag = "BLOCKING" if f.blocking else "note"
+            lines.append(f"  - [{flag}] {f.code}{where}: {f.message}")
+        if s.findings_truncated:
+            lines.append("  - (more findings were not listed)")
     if view.reports:
         lines += ["", "VERIFICATION REPORTS (claims; a person must verify)"]
         for rep in view.reports:

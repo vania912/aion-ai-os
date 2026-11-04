@@ -32,7 +32,7 @@ def audit_text(world: World) -> str:
 
 def test_inventory(world: World) -> None:
     tools = run(world.server.list_tools())
-    assert sorted(t.name for t in tools) == sorted(TOOL_NAMES) and len(tools) == 16
+    assert sorted(t.name for t in tools) == sorted(TOOL_NAMES) and len(tools) == 17
     for t in tools:
         assert t.annotations is not None
         assert t.annotations.read_only_hint is True and t.annotations.open_world_hint is False
@@ -498,4 +498,4 @@ def test_propose_operations_are_denied_unless_the_server_is_started_with_the_fla
         and not ctx.policy.authorize("git_push").allowed
     )
     # The flag adds exactly the four propose/update tools (see test_mcp_write.py).
-    assert len(run(server.list_tools())) == 22 and "READ-ONLY" in (server.instructions or "")
+    assert len(run(server.list_tools())) == 23 and "READ-ONLY" in (server.instructions or "")

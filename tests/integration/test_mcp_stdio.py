@@ -67,7 +67,7 @@ def test_full_session_over_stdio(world: World) -> None:
         return out
 
     out = asyncio.run(session())
-    assert len(out["tools"]) == 16 and len(out["resources"]) == 5
+    assert len(out["tools"]) == 17 and len(out["resources"]) == 5
     assert out["prompts"] == ["analyze_project", "prepare_change_plan", "review_recent_changes"]
     assert json.loads(out["projects"])["projects"][0]["id"] == "pulse"
     assert "def workspace" in out["file"]
@@ -162,7 +162,7 @@ def test_the_allow_propose_flag_is_accepted_and_recorded(world: World) -> None:
         async with Client(params) as client:
             return len((await client.list_tools()).tools)
 
-    assert asyncio.run(count_tools()) == 22  # 16 read-only + 6 write tools
+    assert asyncio.run(count_tools()) == 23  # 17 read-only + 6 write tools
     log = "".join(p.read_text(encoding="utf-8") for p in (world.data / "audit").glob("*.jsonl"))
     start = json.loads(log.splitlines()[0])
     assert start["op"] == "server_start" and start["args"]["allow_propose"] is True
@@ -192,7 +192,7 @@ def test_propose_review_accept_history_over_stdio(world: World) -> None:
             return names, json.loads(text(result)), text(before)
 
     names, proposal, before = asyncio.run(propose())
-    assert len(names) == 22 and "propose_decision" in names
+    assert len(names) == 23 and "propose_decision" in names
     assert proposal["reviewed"] is False and proposal["status"] == "proposed"
     assert json.loads(before)["current_id"] == "DEC-0002"
     new_id = proposal["id"]

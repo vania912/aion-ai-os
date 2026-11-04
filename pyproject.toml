@@ -44,10 +44,13 @@ select = ["E", "F", "I", "UP", "B", "SIM", "T20", "RUF"]
 # One-line user-facing messages and option help; wrapping them hurts readability.
 "src/aios/interfaces/cli/plan_cmds.py" = ["E501"]
 "src/aios/services/plan_render.py" = ["E501"]
+"src/aios/services/plan_execution.py" = ["E501"]
+"src/aios/domain/seal.py" = ["E501"]
 "src/aios/interfaces/mcp/write_tools.py" = ["E501"]
 "tests/unit/test_plans.py" = ["E501"]
 "tests/unit/test_git_exec.py" = ["E501"]
 "tests/unit/test_plan_execution.py" = ["E501"]
+"tests/unit/test_plan_seal.py" = ["E501"]
 
 [tool.mypy]
 strict = true

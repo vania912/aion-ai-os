@@ -21,7 +21,7 @@ claude mcp add --env AIOS_DATA_DIR=C:\path\to\aios-data --transport stdio aios -
 4. In Claude Code, `/mcp` should show `aios` connected. Tools appear as `mcp__aios__<tool>`,
    prompts as `/mcp__aios__analyze_project <project>`, resources under `@` as
    `aios:project://<id>/...`.
-5. Permissions: the 16 default tools are read-only (22 with `--allow-propose`, see below). Claude Code permission rules name MCP tools
+5. Permissions: the 17 default tools are read-only (23 with `--allow-propose`, see below). Claude Code permission rules name MCP tools
    `mcp__<server>__<tool>`, and a rule `mcp__aios` covers every tool of the server (per the Claude
    Code permission docs). The exact settings-file layout should be taken from the current docs.
 6. Troubleshooting: the server logs JSON to stderr only (stdout is the protocol). If it does not
