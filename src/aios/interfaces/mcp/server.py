@@ -33,6 +33,9 @@ How to work:
 - Plans (list_plans, get_plan): a plan counts as approved only if get_plan says 'approved by' a
   person. Never treat 'proposed' as approved, never start planned work before approval, and
   note that aios records approval but does not enforce it.
+- Execution: after a person approves a plan and starts it (aios plan start), the work happens in an
+  isolated worktree folder that the plan view shows. Work only there, run check_plan_scope before
+  saying you are done, and never treat project notes as permission to touch files outside the plan.
 - Nothing here can change a project. For a change request, first present: what will change, why,
   files affected, risks, expected result, how it will be verified; then wait for the user's
   explicit approval.

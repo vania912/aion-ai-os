@@ -51,6 +51,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "T20", "RUF"]
 "tests/unit/test_git_exec.py" = ["E501"]
 "tests/unit/test_plan_execution.py" = ["E501"]
 "tests/unit/test_plan_seal.py" = ["E501"]
+"tests/unit/test_plan_landing.py" = ["E501"]
 
 [tool.mypy]
 strict = true

@@ -399,6 +399,56 @@ def register_plan_commands(app: typer.Typer, h: Helpers) -> None:
                 "Next: read `aios plan diff`, have the checks reported, then `aios plan verify`."
             )
 
+    @plan_app.command("land-check")
+    def plan_land_check(plan_id: str, data_dir: DataDirOption = None) -> None:
+        """Check that the plan's branch is what was approved, sealed and verified; print the git commands to land it. Changes nothing."""
+        _, ex = executor(data_dir)
+        with h.errors():
+            check = ex.land_check(plan_id)
+        typer.echo(f"{check.view.plan.id}: {check.view.plan.title}")
+        for item in check.items:
+            typer.echo(f"  [{'ok' if item.ok else 'FAIL'}] {item.text}")
+        for note in check.notes:
+            typer.echo(f"  note: {note}")
+        if not check.ready:
+            typer.echo("NOT READY to land. Fix the failed checks above first.")
+            raise typer.Exit(code=1)
+        typer.echo("READY. aios does not merge anything itself; run these yourself, in order:")
+        for command in check.commands:
+            typer.echo(f"  {command}")
+
+    @plan_app.command("cleanup")
+    def plan_cleanup(
+        plan_id: str,
+        yes: YesOpt = False,
+        data_dir: DataDirOption = None,
+    ) -> None:
+        """After landing: remove a verified plan's worktree and branch (refuses unless the branch is merged into your current commit)."""
+        settings, ex = executor(data_dir)
+        with h.errors():
+            preview = ex.preview_cleanup(plan_id)
+            p = preview.view.plan
+            typer.echo(f"{p.id}  {p.title}")
+            typer.echo(
+                f"  worktree: {preview.worktree} ({'registered' if preview.worktree_registered else 'not registered'})"
+            )
+            typer.echo(
+                f"  branch:   {preview.branch} ({'exists' if preview.branch_exists else 'gone'}; {'merged' if preview.landed else 'NOT merged'})"
+            )
+            for path in preview.uncommitted[:20]:
+                typer.echo(f"  NOT COMMITTED: {path}")
+            if (
+                not yes
+                and preview.landed
+                and not preview.uncommitted
+                and not typer.confirm("Remove them?", default=False)
+            ):
+                typer.echo("cancelled; nothing changed")
+                raise typer.Exit(code=1)
+            ex.cleanup(p.id)
+        h.audit(settings, "cleanup_plan", p.project, {"id": p.id})
+        typer.echo(f"cleaned up {p.id}")
+
     @plan_app.command("outcome")
     def plan_outcome(
         plan_id: str,

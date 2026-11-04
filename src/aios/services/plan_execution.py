@@ -74,6 +74,36 @@ class ScopePreview:
 
 
 @dataclass(frozen=True)
+class CheckItem:
+    ok: bool
+    text: str
+
+
+@dataclass(frozen=True)
+class LandCheck:
+    view: PlanView
+    items: list[CheckItem]
+    notes: list[str]
+    commands: list[str]
+
+    @property
+    def ready(self) -> bool:
+        return all(i.ok for i in self.items)
+
+
+@dataclass(frozen=True)
+class CleanupPreview:
+    view: PlanView
+    worktree: Path
+    branch: str
+    worktree_registered: bool
+    branch_exists: bool
+    landed: bool
+    #: Files in the worktree that are not committed on the branch (cleanup would destroy them).
+    uncommitted: list[str]
+
+
+@dataclass(frozen=True)
 class AbandonResult:
     worktree_removed: bool
     branch_deleted: bool
@@ -345,6 +375,136 @@ class PlanExecutor:
         )
         return neutralise_terminal(raw.decode("utf-8", errors="replace")), truncated
 
+    # -- landing ----------------------------------------------------------------------------
+
+    @staticmethod
+    def _quote(path: str | Path) -> str:
+        return '"' + str(path).replace('"', '\\"') + '"'
+
+    def land_check(self, plan_id: str) -> LandCheck:
+        """Check that what is on the plan's branch is exactly what was approved, sealed and
+        verified, and print the git commands to land it. Runs nothing that changes the project."""
+        view = self._plans.get(plan_id)
+        plan, ex, seal = view.plan, view.execution, view.seal
+        if ex is None or seal is None:
+            raise InvalidRequestError(f"{plan.id} has no sealed execution to land")
+        runner, project_path = self._runner(plan.project)
+        worktree = Path(ex.worktree)
+        items: list[CheckItem] = []
+        notes: list[str] = []
+        valid = view.approval is not None and not view.approval_stale
+        who = f" by {view.approval.by}" if view.approval else ""
+        items.append(
+            CheckItem(valid, f"the plan is approved{who} and unchanged since (tier {view.tier})")
+        )
+        items.append(
+            CheckItem(
+                view.status in ("executed", "verified") and seal.outcome == "executed",
+                f"the sealed outcome is 'executed' (now: {view.status}, seal: {seal.outcome})",
+            )
+        )
+        items.append(
+            CheckItem(view.status == "verified", "a person verified it (`aios plan verify`)")
+        )
+        unchanged = False
+        if worktree.is_dir():
+            unchanged = runner.changes(worktree, ex.base_commit).diff_sha256 == seal.diff_sha256
+        items.append(CheckItem(unchanged, "the worktree is exactly as it was sealed"))
+        head = runner.branch_head(ex.branch)
+        committed = False
+        if head is not None:
+            committed = runner.commit_diff_sha256(ex.base_commit, head) == seal.diff_sha256
+        items.append(
+            CheckItem(committed, f"branch {ex.branch} holds commits identical to the sealed diff")
+        )
+        commands: list[str] = []
+        if unchanged and not committed:
+            commands += [
+                f"git -C {self._quote(worktree)} add -A",
+                f'git -C {self._quote(worktree)} commit -m "{plan.title} ({plan.id})"',
+            ]
+            notes.append(
+                "the work is not committed on the branch yet; commit it in the worktree, then run land-check again"
+            )
+        current = runner.resolve_commit("HEAD")
+        target = runner.current_branch() or "a detached HEAD"
+        if head is not None and runner.is_ancestor(current, head):
+            merge = f"git -C {self._quote(project_path)} merge --ff-only {ex.branch}"
+            notes.append(
+                f"your branch {target} has not moved since the plan started or is an ancestor: a fast-forward merge works"
+            )
+        else:
+            merge = f"git -C {self._quote(project_path)} merge --no-ff {ex.branch}"
+            notes.append(
+                f"your branch {target} has moved on since the plan started: this is not a fast-forward, so the merge result is not exactly the sealed diff; review it"
+            )
+        dirty = set(runner.dirty_paths())
+        touched = {c for c in (f.path for f in plan.files)}
+        if dirty & touched:
+            notes.append(
+                "uncommitted changes in your working tree touch planned files: "
+                + ", ".join(sorted(dirty & touched)[:MAX_LISTED])
+            )
+        commands += [merge, f"aios plan cleanup {plan.id}"]
+        return LandCheck(view, items, notes, commands)
+
+    def preview_cleanup(self, plan_id: str) -> CleanupPreview:
+        view = self._plans.get(plan_id)
+        if view.status != "verified" or view.execution is None:
+            raise InvalidRequestError(
+                f"{view.plan.id} is {view.status}; cleanup is for a verified plan after it was landed"
+            )
+        runner, _ = self._runner(view.plan.project)
+        ex = view.execution
+        worktree = Path(ex.worktree)
+        registered = any(_same(w.path, worktree) for w in runner.worktree_list())
+        head = runner.branch_head(ex.branch)
+        if head is None and not registered:
+            raise InvalidRequestError(f"{view.plan.id} has no worktree or branch left to clean up")
+        # "landed" needs commits of the plan's own on the branch, and the project must contain them
+        landed = (
+            head is not None
+            and head != ex.base_commit
+            and runner.is_ancestor(head, runner.resolve_commit("HEAD"))
+        )
+        uncommitted: list[str] = []
+        if registered and worktree.is_dir() and head is not None:
+            snapshot = runner.changes(worktree, head)
+            uncommitted = [c.path for c in snapshot.changes] + snapshot.ignored
+        return CleanupPreview(
+            view, worktree, ex.branch, registered, head is not None, landed, uncommitted
+        )
+
+    def cleanup(self, plan_id: str) -> CleanupPreview:
+        """Remove the worktree and branch of a verified plan whose branch has been merged into the
+        project's current commit. Refuses otherwise (use ``abandon`` to discard unlanded work)."""
+        with self._plans.lock():
+            preview = self.preview_cleanup(plan_id)
+            if not preview.landed:
+                raise InvalidRequestError(
+                    f"branch {preview.branch} has no commits of its own that your current commit "
+                    "contains; land it first (see `aios plan land-check`)"
+                )
+            if preview.uncommitted:
+                shown = ", ".join(preview.uncommitted[:MAX_LISTED])
+                raise InvalidRequestError(
+                    f"the worktree has changes that are not committed on {preview.branch} and "
+                    f"would be lost: {shown}"
+                )
+            runner, _ = self._runner(preview.view.plan.project)
+            if preview.worktree_registered:
+                if preview.worktree.is_dir():
+                    runner.worktree_remove(preview.worktree)
+                else:
+                    runner.worktree_prune()
+            elif preview.worktree.exists():
+                raise InvalidRequestError(
+                    f"{preview.worktree} exists but git does not know it as a worktree; aios will not delete it"
+                )
+            if preview.branch_exists:
+                runner.branch_delete(preview.branch)
+        return preview
+
     # -- abandon ----------------------------------------------------------------------------
 
     def preview_abandon(self, plan_id: str) -> AbandonPreview:
@@ -468,10 +628,25 @@ class PlanExecutor:
             if now_sha != view.seal.diff_sha256:
                 add(Severity.WARNING, "plan_seal_changed",
                     f"{view.plan.id}: the worktree changed after it was sealed; seal it again")  # fmt: skip
+        for view in mine.values():
+            ex = view.execution
+            if view.status != "verified" or ex is None:
+                continue
+            head = runner.branch_head(ex.branch)
+            still_there = head is not None or any(w.branch == ex.branch for w in registered)
+            if (
+                head is not None
+                and still_there
+                and head != ex.base_commit
+                and runner.is_ancestor(head, runner.resolve_commit("HEAD"))
+            ):
+                add(Severity.WARNING, "plan_landed_not_cleaned",
+                    f"{view.plan.id} is verified and its branch is merged; "
+                    f"`aios plan cleanup {view.plan.id}` removes the worktree and branch")  # fmt: skip
         in_use = {
             v.plan.id
             for v in mine.values()
-            if v.status in ("started", "partially_completed", "executed")
+            if v.status in ("started", "partially_completed", "executed", "verified")
         }
         for info in registered:
             name = info.branch or ""

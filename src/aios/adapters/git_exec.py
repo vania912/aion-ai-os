@@ -295,6 +295,40 @@ class GitWriteRunner:
         names = out.stdout.decode("utf-8", errors="replace").split("\n")
         return sorted(n.strip() for n in names if BRANCH_RE.match(n.strip()))
 
+    def branch_head(self, branch: str) -> str | None:
+        """The commit a local aios branch points at (None if the branch does not exist)."""
+        self._check_branch(branch)
+        out = self._git(
+            ["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"],
+            cwd=self._root,
+            ok_codes=(0, 1),
+        )
+        sha = out.stdout.decode("ascii", errors="replace").strip()
+        return sha if out.returncode == 0 and SHA_RE.match(sha) else None
+
+    def is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        """Whether ``ancestor`` is reachable from ``descendant`` (so a merge would fast-forward)."""
+        if not (SHA_RE.match(ancestor) and SHA_RE.match(descendant)):
+            raise GitError("commit ids must be full")
+        out = self._git(
+            ["merge-base", "--is-ancestor", ancestor, descendant], cwd=self._root, ok_codes=(0, 1)
+        )
+        return out.returncode == 0
+
+    def commit_diff_sha256(self, base_sha: str, head_sha: str) -> str:
+        """SHA-256 of the binary diff between two commits, computed exactly like the snapshot's
+        diff, so a committed result can be compared with a sealed worktree."""
+        if not (SHA_RE.match(base_sha) and SHA_RE.match(head_sha)):
+            raise GitError("commit ids must be full")
+        out = self._git(
+            ["diff", "--binary", "--full-index", "--src-prefix=a/", "--dst-prefix=b/",
+             "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", base_sha, head_sha],
+            cwd=self._root, cap=self._max_diff_bytes,
+        )  # fmt: skip
+        if out.truncated:
+            raise GitError(f"the change is larger than {self._max_diff_bytes} bytes")
+        return hashlib.sha256(out.stdout).hexdigest()
+
     def branch_exists(self, branch: str) -> bool:
         self._check_branch(branch)
         out = self._git(
