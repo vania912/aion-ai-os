@@ -1,7 +1,7 @@
 # Phase 4 plan — controlled execution (decision needed: ADR-0006)
 
-Status: **D1-D5 decided by the user (2026-11-04); D6-D8 assumed (no objection raised). Implementation
-not started; waiting for the user's go for step 4a.** Decisions are recorded in
+Status: **D1-D5 decided by the user (2026-11-04); D6-D8 assumed (no objection raised). Step 4a is
+implemented (section 9); 4b-4d not started.** Decisions are recorded in
 [ADR-0011](adr/0011-phase4-execution-model.md). Date: 2026-11-04.
 Legend: **[V]** verified by an experiment in this session · **[J]** my judgement · **[U]** unverified.
 
@@ -122,3 +122,36 @@ for Phase 3-style plans and is labelled self-reported).
 
 No push, no commit to your branch, no deploy, no network access, no running of project code by aios,
 no delete of your files outside the plan's worktree. Those stay manual (R3) and are outside this phase.
+
+## 9. Step 4a result (2026-11-04)
+
+Done: `GitWriteRunner` (see [GIT.md](GIT.md), "The write runner"); the shared `run_process` helper now
+starts git in its own process group and kills the group on timeout or output cap; launch failures
+become `GitError`.
+
+Verification: 1,015 tests locally (1 POSIX-only skip); ruff and mypy strict clean. New:
+`tests/unit/test_git_exec.py` (a repository whose config, attributes, hooks, included files and
+fsmonitor all try to run a script; a *control* test shows plain git does run them, so the other tests
+cannot pass vacuously on a platform where the trap does not fire; hooks, smudge/clean/process
+filters, textconv, external diff, user config, `GIT_*` variables, path/branch/revision validation,
+removal limits, snapshot classification incl. symlink, mode, binary, nested repo, ignored, awkward
+names, CRLF, size cap, timeout, scratch cleanup) and `tests/unit/test_regex_anchors.py`.
+Mutation checks: 20 deliberate breaks (hooks not redirected, filters/`process`/`required` not
+overridden, user config read, `GIT_*` kept, fsmonitor on, ext-diff/textconv allowed, branch regex with
+a bare `$`, removal of non-aios or main worktrees, worktree inside the project, symlinked path not
+resolved, snapshot using the real index, ignored files unlisted, truncated diff accepted, revision
+syntax unchecked, timeout killing only git, scratch not cleaned) each failed a test, after I fixed
+the tests for the first survivors (empty-config redundancy, elapsed time on timeout). One mutation
+(`--end-of-options` removed) is equivalent because the revision syntax check rejects the same input.
+
+Defects found along the way:
+- **Python's `$` matches before a trailing newline**, so `aios/PLAN-0001\n` passed the branch check.
+  The same pattern style was used for record ids, project names, plan ids, refs and file names across
+  the codebase. All validator regexes now end with `\Z`, and a test fails if one ends with a bare `$`.
+- A timeout killed only git, so a child process holding the output pipe delayed the error (30 s in a
+  test). Fixed with process-group kill.
+- A git that cannot start raised a raw `FileNotFoundError`; now `GitError`.
+- Control-test finding: with `required=true`, blanking only `process` makes git fail the checkout, so
+  the override set always includes `required=false`.
+
+Not verified: Windows (CI will tell); other git versions than 2.43 locally.

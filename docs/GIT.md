@@ -82,3 +82,38 @@ A repository's history can contain files the policy would never let you read (a 
   checks in `vet_repo_path`. Two of these (`:` in refs, `GIT_*` scrub) initially **survived**
   because my first tests were too weak (the `:` case was also stopped by a second layer; the
   `GIT_*` test used a decoy repository that failed either way). They were rewritten and are caught.
+
+## The write runner (Phase 4a)
+
+`aios.adapters.git_exec.GitWriteRunner` is the only code that lets aios change a project's `.git`
+(worktrees and branches for plan execution, see [PHASE4-PLAN.md](PHASE4-PLAN.md)). It is not a
+pass-through like the read-only runner above: callers use typed methods (`resolve_commit`,
+`worktree_add`, `worktree_remove`, `branch_delete`, `branch_exists`, `worktree_list`, `changes`) and
+the argument lists are built from validated values. It never pushes, fetches, commits, merges or
+checks out in the main working tree. **Nothing calls it yet**: `aios plan start` arrives in step 4b.
+
+Why it needs its own hardening (observed 2026-11-04, git 2.43): a plain `git worktree add` ran the
+repository's `post-checkout` hook and its smudge filter, and a repository's long-running `process`
+filter also ran unless it was overridden too. Creating a worktree would execute project-controlled
+code. Measures, each with a test against a repository that tries to run its own script:
+
+- hooks are redirected to an empty directory; every `filter.<name>.{smudge,clean,process,required}`
+  found in the repository's configuration, including files pulled in by `include.path`, is overridden
+  (pass-through `cat`, empty `process`, `required=false`). Consequence: LFS or other filters do not
+  run, so such files are checked out as stored, which is fine for scope checking and wrong for
+  building the project in that worktree;
+- system and user git configuration are not read; every `GIT_*` variable from the parent is dropped;
+- `core.fsmonitor` is off; diffs never use external diff programs or textconv; submodule recursion,
+  auto-gc and network protocols are disabled; stdin is closed; a timeout kills the whole process
+  group (otherwise a hook or filter holding the output pipe delayed the error); output is capped;
+- only branches named `aios/PLAN-nnnn` are created or deleted; only worktrees registered with such a
+  branch are removed (never the main working tree, never an arbitrary directory); the worktree path
+  must be absolute, outside the project, and not exist;
+- `changes()` snapshots a worktree against a base commit without touching the worktree: it copies the
+  index, adds untracked files *intent-to-add* to the copy, and reports changed paths (added,
+  modified, deleted, type-changed, with modes and a binary flag), git-ignored files (a fresh worktree
+  has none, so any present are new), and a SHA-256 of the full binary diff. Awkward names (spaces,
+  newlines, non-UTF-8) are handled with NUL-separated output.
+
+Not covered / not verified: Windows behaviour (the `NUL` device, long paths, `taskkill`, CRLF) until
+CI says so; git features the tests do not exercise; empty directories (git does not track them).
