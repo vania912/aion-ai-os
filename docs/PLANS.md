@@ -43,14 +43,46 @@ content does not apply. So editing a plan after approval cancels the approval (i
 proposed --approve--> approved --outcome--> executed ----verify----> verified
    |                     |  \--> partially_completed --verify--> verified
    |                     |  \--> failed
+   |                     +--start--> started --abandon--> approved   (4b)
    +--reject--> rejected <+ (also from approved, before any outcome)
 ```
+`started` leaves only by `abandon` until the seal exists (step 4c).
 
 - Claude-written plans (`origin: claude`) always start `proposed`.
 - `verified` needs: an `executed` or `partially_completed` plan **and** a report in which every
   verification step passed **and** a person running `aios plan verify`.
 - A plan revised by a newer plan (`revises`) can no longer be approved; if the revision is rejected,
   the original is usable again.
+
+## Executing a plan in an isolated worktree (Phase 4b)
+
+`aios plan start PLAN-0001` (you, in a terminal) creates a git **branch `aios/PLAN-0001` and a
+separate worktree** from the project's current commit, and records a `started` event with the base
+commit. Claude Code is then started with the worktree folder as its working directory. Your own
+branch and working tree are not touched; the project's `.git` gets the branch and worktree data.
+
+- **Where:** `AIOS_WORKTREES_DIR/<project>/PLAN-nnnn` if you set that variable (absolute path),
+  otherwise a sibling of the project: `<project folder>.aios-worktrees/PLAN-nnnn`. Never inside the
+  project and never inside your data repo.
+- **Before it runs** you see the plan, the base commit and branch, the folder, and warnings, for
+  example uncommitted changes in your main working tree (the worktree starts from the last commit and
+  will not contain them; planned files with such changes are listed).
+- **Idempotent and crash-safe.** The worktree is created first and the event second, so `started`
+  always means a worktree existed. If a crash happens in between, running `start` again adopts the
+  leftover worktree if it has the expected branch and is still on the current commit. Anything else
+  in the way (a folder git does not know, a branch without a worktree, a different worktree at the
+  path) is reported and left untouched: aios never deletes a directory that is not a registered aios
+  worktree.
+- **`aios plan abandon PLAN-0001`** removes the worktree and deletes the branch (`--keep-branch` keeps
+  it, with any commits on it) after listing the changed and git-ignored files that will be lost; the
+  plan goes back to `approved`. It also cleans the leftovers of an interrupted start. A kept branch
+  blocks a new start until it is deleted.
+- While a plan is `started` it cannot be rejected or given a manual outcome (abandon first); the
+  outcome will come from the seal (step 4c, not built yet). Editing a plan's content during execution
+  cancels its approval, as before.
+- `aios doctor` adds `plan_worktree_missing` (error), `plan_started_stale` (14 days),
+  `orphan_worktree`, `orphan_branch` and `plan_git_unavailable`.
+- No MCP tool can start or abandon a plan.
 
 ## Who can do what
 

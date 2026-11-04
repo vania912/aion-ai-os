@@ -1,7 +1,7 @@
 # Phase 4 plan — controlled execution (decision needed: ADR-0006)
 
-Status: **D1-D5 decided by the user (2026-11-04); D6-D8 assumed (no objection raised). Step 4a is
-implemented (section 9); 4b-4d not started.** Decisions are recorded in
+Status: **D1-D5 decided by the user (2026-11-04); D6-D8 assumed (no objection raised). Steps 4a and 4b are
+implemented (sections 9, 10); 4c-4d not started.** Decisions are recorded in
 [ADR-0011](adr/0011-phase4-execution-model.md). Date: 2026-11-04.
 Legend: **[V]** verified by an experiment in this session · **[J]** my judgement · **[U]** unverified.
 
@@ -161,3 +161,33 @@ meaningful on that platform. A first Windows run had failed only on a mypy platf
 Still skipped on Windows: symlink/mode and newline/non-UTF-8 file-name tests (need POSIX), and the
 timeout test (uses a shell script as a fake git), so the `taskkill`-based tree kill is **not
 exercised** anywhere yet. Not verified: git versions other than 2.43 (Linux) and the Windows runner's.
+
+## 10. Step 4b result (2026-11-04)
+
+Done: `started` and `abandoned` plan events and the `started` status (derived, like all status);
+`PlanExecutor` (`aios plan start`, `aios plan abandon`, previews, adoption of an interrupted start,
+leftover handling); `AIOS_WORKTREES_DIR`; execution info in `aios plan show`, the snapshot ("started
+in a worktree") and `get_plan`; doctor checks. New runner helpers: `current_branch`, `dirty_paths`,
+`branches`, `worktree_prune`. See [PLANS.md](PLANS.md).
+
+Verification: 1,062 tests locally (1 POSIX-only skip); ruff, mypy and `mypy --platform win32` clean.
+`tests/unit/test_plan_execution.py` (47 tests): state machine (allowed and refused transitions,
+malformed `started` events, branch of another plan, edits during execution), real git (start leaves
+the project's branch/commit/working tree unchanged, idempotent, moved HEAD, dirty-file warnings,
+crash recovery by monkey-patching the event write, leftover worktree on another commit, unknown
+directory / existing branch / foreign worktree in the way, abandon incl. keep-branch, interrupted-start
+cleanup, directory deleted by hand, never deleting an unregistered folder, reject/outcome while
+started, hostile `post-checkout` hook not run with a control, three simultaneous starts), doctor, CLI
+(prompts, audit without plan text), settings, and "no MCP tool can start or abandon".
+Mutation checks: 20 deliberate breaks (start/abandon from any state, reject or manual outcome while
+started, branch of another plan, unchecked base commit, execution kept after abandon, moved HEAD
+ignored, non-idempotent start, adoption on another commit, unknown directory / existing branch /
+foreign worktree tolerated, unregistered directory deleted, keep-branch ignored, no `abandoned` event,
+adoption creating a second worktree, non-git project allowed, dirty files not warned, stale execution
+unreported) each failed a test on the first run.
+
+Decision recorded: **abandon returns the plan to `approved`** (D8-style detail not in the plan): the
+approval stays valid, and a new `start` is allowed once the branch is gone.
+
+Not verified: Windows (CI); a real Claude Code session working inside a started worktree (step 4d);
+what happens to a worktree when the *project* directory is moved or renamed.
