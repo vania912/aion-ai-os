@@ -154,4 +154,10 @@ Defects found along the way:
 - Control-test finding: with `required=true`, blanking only `process` makes git fail the checkout, so
   the override set always includes `required=false`.
 
-Not verified: Windows (CI will tell); other git versions than 2.43 locally.
+CI (commit `91e7155`): green on ubuntu and windows, Python 3.11 and 3.13. On Windows the control
+test ran (it was not skipped), so the booby trap fires there too and the hardening tests are
+meaningful on that platform. A first Windows run had failed only on a mypy platform check
+(`os.killpg` does not exist on win32); `mypy --platform win32` now works locally for that class.
+Still skipped on Windows: symlink/mode and newline/non-UTF-8 file-name tests (need POSIX), and the
+timeout test (uses a shell script as a fake git), so the `taskkill`-based tree kill is **not
+exercised** anywhere yet. Not verified: git versions other than 2.43 (Linux) and the Windows runner's.

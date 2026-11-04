@@ -115,5 +115,6 @@ code. Measures, each with a test against a repository that tries to run its own 
   has none, so any present are new), and a SHA-256 of the full binary diff. Awkward names (spaces,
   newlines, non-UTF-8) are handled with NUL-separated output.
 
-Not covered / not verified: Windows behaviour (the `NUL` device, long paths, `taskkill`, CRLF) until
-CI says so; git features the tests do not exercise; empty directories (git does not track them).
+Not covered / not verified: on Windows the hostile-repository tests pass in CI, but the `taskkill`
+tree kill and symlink/mode handling are not exercised there; git features the tests do not exercise;
+empty directories (git does not track them).
