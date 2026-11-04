@@ -367,7 +367,10 @@ def test_symlinks_mode_changes_and_nested_repos_fail_a_real_execution(env: Env) 
 
 def test_the_diff_for_review_cannot_hide_lines_with_control_characters(env: Env) -> None:
     pid, wt = started(env)
-    (wt / "src" / "util.py").write_text("safe\n\x1b[2K\x1b[1A hidden‮ rtl\x07 bell\n")
+    payload = (
+        "safe\n\x1b[2K\x1b[1A hidden" + chr(0x202E) + " rtl\x07 bell\n"
+    )  # no literal bidi char in source
+    (wt / "src" / "util.py").write_text(payload, encoding="utf-8")
     text, truncated = env.ex.diff_for_review(pid)
     assert "\x1b" not in text and "‮" not in text and "\x07" not in text
     assert "<U+001B>" in text and "<U+202E>" in text and "+safe" in text and not truncated
@@ -499,3 +502,24 @@ def test_mcp_scope_check_is_read_only_and_matches_the_cli(tmp_path: Path) -> Non
         for t in __import__("tests.mcp_helpers", fromlist=["run"]).run(world.server.list_tools())
     }
     assert "check_plan_scope" in names and not [n for n in names if "seal" in n]
+
+
+def test_an_edit_made_right_after_checkout_is_not_missed_by_git_stat_caching(env: Env) -> None:
+    """Regression: copying the worktree's index made git trust size+mtime and miss a same-size
+    edit made within the clock's resolution of the checkout (seen on Windows). Reproduced on any
+    platform by comparing only size and mtime (core.checkStat=minimal) and restoring the mtime."""
+    from tests.git_helpers import run_git
+
+    run_git(env.repo, "config", "core.checkStat", "minimal")
+    run_git(env.repo, "config", "core.trustctime", "false")
+    pid, wt = started(env)
+    target = wt / "src" / "util.py"
+    before = target.stat()
+    original = target.read_bytes()
+    edited = original.replace(b"return 1", b"return 2")
+    assert len(edited) == len(original)
+    target.write_bytes(edited)
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))  # same size, same mtime
+    preview = env.ex.preview_scope(pid)
+    assert [c.path for c in preview.snapshot.changes] == ["src/util.py"]
+    assert preview.scope.outcome == "executed"

@@ -305,21 +305,21 @@ class GitWriteRunner:
         return out.returncode == 0
 
     @contextlib.contextmanager
-    def _intent_to_add_index(self, cwd: Path) -> Iterator[Path]:
-        """A temporary copy of the worktree's index with every untracked, non-ignored file added
-        intent-to-add. The worktree's own index is never written."""
-        index_out = self._git(["rev-parse", "--git-path", "index"], cwd=cwd).stdout
-        index_path = Path(index_out.decode("utf-8", errors="replace").strip())
-        if not index_path.is_absolute():
-            index_path = cwd / index_path
+    def _intent_to_add_index(self, cwd: Path, base_sha: str) -> Iterator[Path]:
+        """A temporary index built fresh from ``base_sha`` with every untracked, non-ignored file
+        added intent-to-add. The worktree's own index is never read or written.
+
+        Building it from the base commit (not copying the worktree's index) matters: a copy has a
+        newer timestamp than its entries, so git would trust the recorded size and mtime of files
+        edited right after checkout and miss the edit (seen on Windows, whose clock is coarse). An
+        index made by ``read-tree`` has no stat data, so git compares every file's content.
+        """
         fd, tmp_name = tempfile.mkstemp(prefix="index-", dir=self._scratch)
         os.close(fd)
         tmp_index = Path(tmp_name)
+        tmp_index.unlink()  # git creates it
         try:
-            if index_path.is_file():
-                shutil.copyfile(index_path, tmp_index)
-            else:
-                tmp_index.unlink()  # let git create it
+            self._git(["read-tree", base_sha], cwd=cwd, index_file=tmp_index)
             self._git(["add", "--intent-to-add", "--all", "--", "."], cwd=cwd, index_file=tmp_index)
             yield tmp_index
         finally:
@@ -343,7 +343,7 @@ class GitWriteRunner:
             raise GitError("the base must be a full commit id")
         cwd = Path(self._registered(worktree).path)
         common = ["--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"]
-        with self._intent_to_add_index(cwd) as index:
+        with self._intent_to_add_index(cwd, base_sha) as index:
             out = self._git(
                 ["diff", "--src-prefix=a/", "--dst-prefix=b/", *common, base_sha],
                 cwd=cwd, index_file=index, cap=max_bytes,
@@ -361,7 +361,7 @@ class GitWriteRunner:
         cwd = Path(self._registered(worktree).path)
         common = ["--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"]
         cap = self._max_diff_bytes
-        with self._intent_to_add_index(cwd) as index:
+        with self._intent_to_add_index(cwd, base_sha) as index:
             raw = self._git(
                 ["diff", "--raw", "-z", "--full-index", *common, base_sha],
                 cwd=cwd, index_file=index, cap=cap,
