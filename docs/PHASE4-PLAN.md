@@ -222,5 +222,16 @@ Design notes to challenge: a `failed` seal is final (D8a). The CLI warns and def
 stray cache directory does not end a plan by accident, and `scope` / `check_plan_scope` let the work be
 cleaned up first. If that still feels too harsh, the alternative is a non-final `failed`.
 
-Not verified: Windows (CI); a real Claude Code session producing the worktree changes (step 4d);
-case-insensitive file systems beyond the letter-case hint.
+- **Windows CI found a real bug in the 4a snapshot.** `changes()` copied the worktree's index to a
+  temporary file. A copy has a newer timestamp than its entries, so git's "racily clean" protection
+  stops re-checking content and trusts the recorded size and mtime; a same-size edit made within the
+  clock's resolution of the checkout was missed (Windows' clock is coarse, so it showed on the very
+  first execution test). The 4a tests did not catch it because they edit files seconds later with
+  different sizes. Fix: build the temporary index fresh with `git read-tree <base>`, which records no
+  stat data, so git compares every file's content. The regression test restores the mtime of a
+  same-size edit under `core.checkStat=minimal` after a 1.5 s wait, fails with the old approach and
+  passes now. Cost: git rehashes every file on each snapshot (slower on very large repositories).
+- A second Windows failure was a test writing a non-cp1252 character with the default encoding.
+
+Not verified: Windows after these fixes (CI); a real Claude Code session producing the worktree
+changes (step 4d); case-insensitive file systems beyond the letter-case hint.
