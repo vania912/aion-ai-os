@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -513,6 +514,7 @@ def test_an_edit_made_right_after_checkout_is_not_missed_by_git_stat_caching(env
     run_git(env.repo, "config", "core.checkStat", "minimal")
     run_git(env.repo, "config", "core.trustctime", "false")
     pid, wt = started(env)
+    time.sleep(1.5)  # long enough that git no longer treats the recorded entries as "racy"
     target = wt / "src" / "util.py"
     before = target.stat()
     original = target.read_bytes()
