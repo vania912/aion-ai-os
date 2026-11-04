@@ -109,8 +109,8 @@ code. Measures, each with a test against a repository that tries to run its own 
 - only branches named `aios/PLAN-nnnn` are created or deleted; only worktrees registered with such a
   branch are removed (never the main working tree, never an arbitrary directory); the worktree path
   must be absolute, outside the project, and not exist;
-- `changes()` snapshots a worktree against a base commit without touching the worktree: it copies the
-  index built fresh from the base commit, adds untracked files *intent-to-add* to it, and reports changed paths (added,
+- `changes()` snapshots a worktree against a base commit without touching the worktree: it builds a temporary index fresh from the base commit (never copies the
+  worktree's own index: a copy hides same-size edits behind git's stat cache), adds untracked files *intent-to-add* to it, and reports changed paths (added,
   modified, deleted, type-changed, with modes and a binary flag), git-ignored files (a fresh worktree
   has none, so any present are new), and a SHA-256 of the full binary diff. Awkward names (spaces,
   newlines, non-UTF-8) are handled with NUL-separated output.
