@@ -18,6 +18,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 from collections.abc import Sequence
@@ -125,7 +126,7 @@ class GitRunner:
 
 def _new_group_kwargs() -> dict[str, Any]:
     """Start git in its own process group so that a timeout can stop its children too."""
-    if os.name == "posix":
+    if sys.platform != "win32":
         return {"start_new_session": True}
     return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
 
@@ -133,7 +134,7 @@ def _new_group_kwargs() -> dict[str, Any]:
 def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
     """Kill git and whatever it started (hooks, filters), which could hold the pipe open."""
     try:
-        if os.name == "posix":
+        if sys.platform != "win32":
             os.killpg(proc.pid, signal.SIGKILL)
         else:
             subprocess.run(
