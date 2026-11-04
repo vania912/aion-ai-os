@@ -7,6 +7,7 @@ import gc
 import os
 import stat
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -177,6 +178,19 @@ def test_system_and_user_git_config_are_not_read(
     (path / "b.dat").write_text("changed\n")
     fresh.changes(path, base)
     assert not {r for r in hostile.ran() if r.startswith(("user-", "hook-"))}
+
+
+def test_only_the_repositorys_own_config_is_consulted_for_filters(
+    hostile: Hostile, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = tmp_path / ".gitconfig"
+    user.write_text('[filter "from-user-config"]\n\tsmudge = true\n')
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    overrides = " ".join(GitWriteRunner(hostile.repo)._filter_overrides(hostile.repo))
+    assert "filter.evil." in overrides and "filter.inc.x." in overrides  # repo + included file
+    assert "from-user-config" not in overrides
 
 
 def test_git_environment_variables_from_the_parent_are_dropped(
@@ -436,8 +450,10 @@ def test_a_slow_git_is_stopped(hostile: Hostile, tmp_path: Path) -> None:
     slow.write_text("#!/bin/sh\nsleep 30\n", newline="\n")
     slow.chmod(slow.stat().st_mode | stat.S_IEXEC)
     impatient = GitWriteRunner(hostile.repo, executable=str(slow), timeout_s=0.3)
+    started = time.monotonic()
     with pytest.raises(GitError, match="timed out"):
         impatient.worktree_list()
+    assert time.monotonic() - started < 10  # not held up by the 30 s sleep git "started"
 
 
 def test_the_scratch_directory_is_removed_with_the_runner(hostile: Hostile) -> None:
