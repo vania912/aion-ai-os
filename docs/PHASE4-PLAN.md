@@ -1,7 +1,8 @@
 # Phase 4 plan — controlled execution (decision needed: ADR-0006)
 
-Status: **proposal, not started. Nothing in this document is decided.** It needs your answers to
-D1-D8 (section 4). Date: 2026-11-04.
+Status: **D1-D5 decided by the user (2026-11-04); D6-D8 assumed (no objection raised). Implementation
+not started; waiting for the user's go for step 4a.** Decisions are recorded in
+[ADR-0011](adr/0011-phase4-execution-model.md). Date: 2026-11-04.
 Legend: **[V]** verified by an experiment in this session · **[J]** my judgement · **[U]** unverified.
 
 ## 1. The problem Phase 4 solves

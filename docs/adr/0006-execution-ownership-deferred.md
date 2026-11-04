@@ -1,6 +1,6 @@
 # ADR-0006: Who executes approved writes is deferred
 
-- **Status:** Deferred (revisit after Phase 3)
+- **Status:** Superseded by [ADR-0011](0011-phase4-execution-model.md) (decided 2026-11-04)
 - **Date:** 2026-11-03
 
 ## Decision
