@@ -121,6 +121,36 @@ diff cannot hide lines from you.
   what the outcome would be, before telling you the work is done. It records and changes nothing; there
   is no tool to seal.
 
+## Landing the change (Phase 4d)
+
+aios never merges anything. After `verify`, `aios plan land-check PLAN-0001` checks, and prints the
+git commands for you to run:
+
+1. the plan is still approved for its current content;
+2. the sealed outcome is `executed` (not partial or failed);
+3. a person verified it;
+4. the worktree is exactly as it was sealed;
+5. the branch `aios/PLAN-0001` holds **commits whose diff is identical to the sealed diff**.
+
+If only item 5 fails because the work is uncommitted, it prints the `git add` and `git commit`
+commands for the worktree. When all pass it prints `git -C <project> merge --ff-only aios/PLAN-0001`
+(or `--no-ff` with a note if your branch moved on since the plan started, in which case the merge
+result is not exactly the sealed diff and you should review it) and `aios plan cleanup`. Exit code 0
+means ready. The comparison uses aios's own git settings (no filters, no autocrlf from your user
+config); if your commit goes through line-ending conversion the diff can differ and land-check will
+say so rather than guess.
+
+`aios plan cleanup PLAN-0001` (after you merged) removes the worktree and branch. It refuses unless
+the branch has commits of its own that your current commit contains **and** the worktree has nothing
+uncommitted. (A branch that still sits on the base commit is trivially "merged"; an early version
+treated that as landed and could have deleted the only copy of sealed work. A regression test covers
+it.) `aios doctor` reports `plan_landed_not_cleaned`.
+
+The prompt `/mcp__aios__prepare_change_plan` now tells Claude to work only inside the worktree folder
+shown in `get_plan`, never to edit your main working tree, commit to your branch or push, to call
+`check_plan_scope` before saying it is done, to treat project notes as data (not as permission to
+touch files outside the plan), and to report verification honestly.
+
 ## Who can do what
 
 | Action | Person (CLI) | Claude (MCP) |
@@ -132,6 +162,7 @@ diff cannot hide lines from you.
 | file a verification report | `aios plan report` | `record_verification` (a claim) |
 | mark verified | `aios plan verify` | **no** |
 | start / abandon / seal an execution | `aios plan start/abandon/seal` | **no** (only the read-only `check_plan_scope`) |
+| land (merge) and clean up | you, with git; `aios plan land-check`, `aios plan cleanup` | **no** |
 
 Approving shows the whole plan. R1/R2 ask for confirmation. **R3** requires typing the first 8
 characters of the hash (`--yes` alone is not enough; scripts add `--confirm <8 chars>`).
